@@ -1183,6 +1183,7 @@ dependencies = [
  "mdict-web-domain",
  "mdict-web-service",
  "metrics-exporter-prometheus",
+ "mime_guess",
  "serde",
  "serde_json",
  "tempfile",

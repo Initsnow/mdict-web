@@ -1,12 +1,12 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mdict_web_config::{AppConfig, DictionaryBundleManifest};
 use mdict_web_domain::{
     DictionaryDetail, DictionaryListResponse, DictionaryStatus, DictionarySummary, LookupResult,
-    ReadinessResponse, ReloadResponse, RenderedEntryContent, ResourceContent, ServiceError,
-    SuggestResponse,
+    ReadinessResponse, ReloadResponse, RenderedEntryContent, ResourceContent, SearchLookupResponse,
+    SearchSuggestResponse, SearchSuggestionItem, ServiceError, SuggestResponse,
 };
 use mdict_web_engine::{DictionaryEngine, LoadedDictionary};
 use thiserror::Error;
@@ -181,6 +181,55 @@ impl DictionaryService {
         })
     }
 
+    pub async fn search_suggest(
+        &self,
+        query: String,
+        limit: Option<usize>,
+        dictionary_ids: Vec<String>,
+    ) -> Result<SearchSuggestResponse, ServiceError> {
+        validate_query("q", &query, self.config.server.query_length_limit)?;
+        let limit = limit
+            .unwrap_or(DEFAULT_SUGGEST_LIMIT)
+            .min(MAX_SUGGEST_LIMIT);
+        let dictionaries = self.selected_dictionaries(&dictionary_ids)?;
+        let mut groups = dictionaries
+            .into_iter()
+            .map(|dictionary| {
+                let dictionary_id = dictionary.manifest.dictionary_id.clone();
+                self.engine
+                    .suggest(&dictionary, &query, limit)
+                    .into_iter()
+                    .map(|item| SearchSuggestionItem {
+                        dictionary_id: dictionary_id.clone(),
+                        key: item.key,
+                        label: item.label,
+                        match_type: item.match_type,
+                    })
+                    .collect::<VecDeque<_>>()
+            })
+            .filter(|items| !items.is_empty())
+            .collect::<Vec<_>>();
+
+        let mut items = Vec::with_capacity(limit);
+        while items.len() < limit {
+            let mut progressed = false;
+            for group in &mut groups {
+                if let Some(item) = group.pop_front() {
+                    items.push(item);
+                    progressed = true;
+                    if items.len() >= limit {
+                        break;
+                    }
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
+
+        Ok(SearchSuggestResponse { query, items })
+    }
+
     pub async fn lookup(
         &self,
         dictionary_id: &str,
@@ -199,6 +248,43 @@ impl DictionaryService {
             content_url: entry_content_url(dictionary_id, &artifact.resolved_key),
             resource_url_template: resource_template_url(dictionary_id),
             etag: artifact.etag,
+        })
+    }
+
+    pub async fn search_lookup(
+        &self,
+        key: String,
+        dictionary_ids: Vec<String>,
+    ) -> Result<SearchLookupResponse, ServiceError> {
+        validate_query("key", &key, self.config.server.query_length_limit)?;
+        let dictionaries = self.selected_dictionaries(&dictionary_ids)?;
+        let mut items = Vec::new();
+
+        for dictionary in dictionaries {
+            let dictionary_id = dictionary.manifest.dictionary_id.clone();
+            match self.engine.lookup(dictionary, key.clone()).await {
+                Ok(artifact) => items.push(LookupResult {
+                    dictionary_id: dictionary_id.clone(),
+                    query_key: key.clone(),
+                    resolved_key: artifact.resolved_key.clone(),
+                    match_type: artifact.match_type,
+                    has_resources: artifact.has_resources,
+                    content_url: entry_content_url(&dictionary_id, &artifact.resolved_key),
+                    resource_url_template: resource_template_url(&dictionary_id),
+                    etag: artifact.etag,
+                }),
+                Err(error) if error.code == mdict_web_domain::ErrorCode::EntryNotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+
+        if items.is_empty() {
+            return Err(ServiceError::entry_not_found_in_scope(&key));
+        }
+
+        Ok(SearchLookupResponse {
+            query_key: key,
+            items,
         })
     }
 
@@ -234,6 +320,32 @@ impl DictionaryService {
                 unavailable.reason.clone(),
             )),
         }
+    }
+
+    fn selected_dictionaries(
+        &self,
+        dictionary_ids: &[String],
+    ) -> Result<Vec<Arc<LoadedDictionary>>, ServiceError> {
+        if dictionary_ids.is_empty() {
+            return Ok(self
+                .dictionaries
+                .values()
+                .filter_map(|state| match state {
+                    DictionaryState::Ready(dictionary) => Some(dictionary.clone()),
+                    DictionaryState::Unavailable(_) => None,
+                })
+                .collect());
+        }
+
+        let mut seen = BTreeSet::new();
+        let mut dictionaries = Vec::new();
+        for dictionary_id in dictionary_ids {
+            if !seen.insert(dictionary_id.clone()) {
+                continue;
+            }
+            dictionaries.push(self.ready_dictionary(dictionary_id)?);
+        }
+        Ok(dictionaries)
     }
 }
 

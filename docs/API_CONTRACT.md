@@ -191,7 +191,89 @@
 }
 ```
 
-### 3.3 词典详情
+### 3.3 全局联想搜索
+
+`GET /api/v1/search/suggest?q={query}&limit={n}&dictionary_id={id}`
+
+约束：
+
+- `q` 必填
+- `limit` 默认 `20`
+- `limit` 最大 `50`
+- `dictionary_id` 可选，可重复传多个；省略时搜索所有 `ready` 词典
+
+响应：
+
+```json
+{
+  "query": "app",
+  "items": [
+    {
+      "dictionary_id": "oald10",
+      "key": "app",
+      "label": "app",
+      "match_type": "prefix"
+    },
+    {
+      "dictionary_id": "ldoce6",
+      "key": "apple",
+      "label": "apple",
+      "match_type": "prefix"
+    }
+  ]
+}
+```
+
+说明：
+
+- 返回聚合后的平铺联想列表，不内联词典正文
+- `limit` 作用于总返回项数，不是单词典配额
+
+性能约定：
+
+- 该接口必须基于每本词典的 sidecar 索引
+- 不允许请求时扫描全量词条
+
+### 3.4 全局聚合查词
+
+`GET /api/v1/search/lookup?key={key}&dictionary_id={id}`
+
+约束：
+
+- `key` 必填
+- `dictionary_id` 可选，可重复传多个；省略时搜索所有 `ready` 词典
+
+响应：
+
+```json
+{
+  "query_key": "Apple",
+  "items": [
+    {
+      "dictionary_id": "oald10",
+      "query_key": "Apple",
+      "resolved_key": "apple",
+      "match_type": "normalized",
+      "has_resources": true,
+      "content_url": "/api/v1/dictionaries/oald10/entries/content?key=apple",
+      "resource_url_template": "/api/v1/dictionaries/oald10/resources/content?key={resource_key}",
+      "etag": "\"entry:oald10:apple:6f91...\""
+    }
+  ]
+}
+```
+
+说明：
+
+- 只返回命中的词典
+- 不通过该接口直接返回词条 HTML
+
+未命中时：
+
+- 返回 `404`
+- `error.code = "entry_not_found"`
+
+### 3.5 词典详情
 
 `GET /api/v1/dictionaries/{dictionary_id}`
 
@@ -202,7 +284,7 @@
 - 返回 `503`
 - `error.code = "dictionary_unavailable"`
 
-### 3.4 联想搜索
+### 3.6 联想搜索
 
 `GET /api/v1/dictionaries/{dictionary_id}/suggest?q={query}&limit={n}`
 
@@ -238,7 +320,7 @@
 - 该接口必须基于 sidecar 索引
 - 不允许请求时扫描全量词条
 
-### 3.5 精确查词
+### 3.7 精确查词
 
 `GET /api/v1/dictionaries/{dictionary_id}/entries/lookup?key={key}`
 
@@ -262,7 +344,7 @@
 - 返回 `404`
 - `error.code = "entry_not_found"`
 
-### 3.6 词条 HTML 内容
+### 3.8 词条 HTML 内容
 
 `GET /api/v1/dictionaries/{dictionary_id}/entries/content?key={key}`
 
@@ -272,7 +354,7 @@
 - `Content-Type: text/html; charset=utf-8`
 - `ETag`
 - `Cache-Control`
-- 严格 CSP
+- 严格 CSP（允许同源父页面通过 iframe 承载，`frame-ancestors 'self'`）
 - `X-Content-Type-Options: nosniff`
 
 响应体：
@@ -288,8 +370,9 @@
 条件请求：
 
 - 若 `If-None-Match` 命中，返回 `304 Not Modified`
+- `304` 响应仍返回与 `200` 一致的词条安全头，确保浏览器缓存不会继续沿用旧 CSP
 
-### 3.7 词典资源内容
+### 3.9 词典资源内容
 
 `GET /api/v1/dictionaries/{dictionary_id}/resources/content?key={resource_key}`
 

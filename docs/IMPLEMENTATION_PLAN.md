@@ -134,6 +134,7 @@ mdict-web/
 
 - `React + Vite`
 - 通过生成的 TypeScript 类型消费 API
+- 开发期优先使用 `Vite` dev server；部署时允许由 `axum` 直接同源托管 `frontend/dist`
 
 ## 5. 核心领域模型
 

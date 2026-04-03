@@ -64,5 +64,16 @@ If code and docs disagree, bring the docs back in sync before ending the task.
 
 本地真实词典 smoke/benchmark 目前默认使用：
 
+- `/home/initsnow/Documents/Dictionaries/英汉/LDOCE5++/LDOCE5++ V 2-15.mdx`
+- `/home/initsnow/Documents/Dictionaries/英汉/LDOCE5++/LDOCE5++ V 2-15.mdd`
+
+若不存在，再回退到旧路径：
+
 - `/home/initsnow/projects/mdict-rs/tmp-dict/LDOCE5++/LDOCE5++ V 2-15.mdx`
 - `/home/initsnow/projects/mdict-rs/tmp-dict/LDOCE5++/LDOCE5++ V 2-15.mdd`
+
+当前二进制默认会在 `frontend/dist` 存在时由 `axum` 直接托管前端静态文件。
+
+- 可用 `--frontend-dist` 或 `MDICT_WEB_FRONTEND_DIST` 覆盖 dist 路径
+- 可用 `--no-frontend` 或 `MDICT_WEB_DISABLE_FRONTEND=true` 关闭静态前端托管
+- 开发期仍优先使用 `frontend/` 下的 Vite dev server

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::Parser;
-use mdict_web_http::{HttpState, router};
+use mdict_web_http::{FrontendAssets, HttpState, router};
 use mdict_web_service::ReloadableDictionaryService;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use tracing::info;
@@ -12,6 +12,10 @@ use tracing_subscriber::EnvFilter;
 struct Cli {
     #[arg(long, env = "MDICT_WEB_CONFIG", default_value = "mdict-web.toml")]
     config: PathBuf,
+    #[arg(long, env = "MDICT_WEB_FRONTEND_DIST", default_value = "frontend/dist")]
+    frontend_dist: PathBuf,
+    #[arg(long, env = "MDICT_WEB_DISABLE_FRONTEND", default_value_t = false)]
+    no_frontend: bool,
 }
 
 #[tokio::main]
@@ -37,7 +41,20 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    let state = HttpState::new(service, metrics);
+    let frontend = if cli.no_frontend {
+        info!("frontend static serving disabled");
+        None
+    } else {
+        let dist = cli.frontend_dist;
+        let frontend = FrontendAssets::new(dist.clone());
+        match &frontend {
+            Some(_) => info!(dist = %dist.display(), "serving frontend static assets from dist"),
+            None => info!(dist = %dist.display(), "frontend dist not found; serving API only"),
+        }
+        frontend
+    };
+
+    let state = HttpState::new(service, metrics, frontend);
     let app = router(
         state,
         server_config.request_body_limit_bytes,

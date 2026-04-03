@@ -27,6 +27,8 @@
             clippy
             rust-analyzer
 
+            pnpm
+            nodejs
             # C/C++ compiler
             # clang
           ];

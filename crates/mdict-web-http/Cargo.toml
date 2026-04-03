@@ -12,6 +12,7 @@ http.workspace = true
 mdict-web-domain = { path = "../mdict-web-domain" }
 mdict-web-service = { path = "../mdict-web-service" }
 metrics-exporter-prometheus.workspace = true
+mime_guess.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

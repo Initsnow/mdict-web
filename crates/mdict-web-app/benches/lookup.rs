@@ -47,15 +47,28 @@ fn lookup_benchmark(criterion: &mut Criterion) {
 }
 
 fn local_fixture_paths() -> Option<(PathBuf, PathBuf)> {
-    let mdx =
-        PathBuf::from("/home/initsnow/projects/mdict-rs/tmp-dict/LDOCE5++/LDOCE5++ V 2-15.mdx");
-    let mdd =
-        PathBuf::from("/home/initsnow/projects/mdict-rs/tmp-dict/LDOCE5++/LDOCE5++ V 2-15.mdd");
-    if mdx.exists() && mdd.exists() {
-        Some((mdx, mdd))
-    } else {
-        None
+    let candidates = [
+        (
+            PathBuf::from(
+                "/home/initsnow/Documents/Dictionaries/英汉/LDOCE5++/LDOCE5++ V 2-15.mdx",
+            ),
+            PathBuf::from(
+                "/home/initsnow/Documents/Dictionaries/英汉/LDOCE5++/LDOCE5++ V 2-15.mdd",
+            ),
+        ),
+        (
+            PathBuf::from("/home/initsnow/projects/mdict-rs/tmp-dict/LDOCE5++/LDOCE5++ V 2-15.mdx"),
+            PathBuf::from("/home/initsnow/projects/mdict-rs/tmp-dict/LDOCE5++/LDOCE5++ V 2-15.mdd"),
+        ),
+    ];
+
+    for (mdx, mdd) in candidates {
+        if mdx.exists() && mdd.exists() {
+            return Some((mdx, mdd));
+        }
     }
+
+    None
 }
 
 fn write_config(dir: &Path, mdx_path: &Path, mdd_path: &Path) -> PathBuf {

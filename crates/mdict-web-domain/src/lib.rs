@@ -115,6 +115,14 @@ impl ServiceError {
         )
     }
 
+    pub fn entry_not_found_in_scope(key: &str) -> Self {
+        Self::new(
+            StatusCode::NOT_FOUND,
+            ErrorCode::EntryNotFound,
+            format!("entry `{key}` was not found in the selected dictionaries"),
+        )
+    }
+
     pub fn resource_not_found(dictionary_id: &str, key: &str) -> Self {
         Self::new(
             StatusCode::NOT_FOUND,
@@ -228,6 +236,20 @@ pub struct SuggestResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchSuggestionItem {
+    pub dictionary_id: String,
+    pub key: String,
+    pub label: String,
+    pub match_type: SuggestionMatchType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchSuggestResponse {
+    pub query: String,
+    pub items: Vec<SearchSuggestionItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LookupResult {
     pub dictionary_id: String,
     pub query_key: String,
@@ -237,6 +259,12 @@ pub struct LookupResult {
     pub content_url: String,
     pub resource_url_template: String,
     pub etag: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchLookupResponse {
+    pub query_key: String,
+    pub items: Vec<LookupResult>,
 }
 
 #[derive(Debug, Clone)]

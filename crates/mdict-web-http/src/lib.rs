@@ -1,3 +1,4 @@
+use std::path::{Component, Path as StdPath, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -20,12 +21,13 @@ use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetReques
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
 
-const ENTRY_CSP: &str = "default-src 'none'; img-src 'self' data: blob:; media-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; connect-src 'none'";
+const ENTRY_CSP: &str = "default-src 'none'; img-src 'self' data: blob:; media-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; connect-src 'none'";
 
 #[derive(Clone)]
 pub struct HttpState {
     pub service: ReloadableDictionaryService,
     pub metrics: Option<PrometheusHandle>,
+    frontend: Option<FrontendAssets>,
     rate_limiter: BasicRateLimiter,
 }
 
@@ -36,6 +38,8 @@ pub fn router(state: HttpState, request_body_limit_bytes: usize, metrics_path: &
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/api/v1/dictionaries", get(list_dictionaries))
+        .route("/api/v1/search/suggest", get(suggest_search))
+        .route("/api/v1/search/lookup", get(lookup_search))
         .route(
             "/api/v1/dictionaries/{dictionary_id}",
             get(dictionary_detail),
@@ -74,16 +78,44 @@ pub fn router(state: HttpState, request_body_limit_bytes: usize, metrics_path: &
         router = router.route(&metrics_path, get(metrics_endpoint));
     }
 
+    if state.frontend.is_some() {
+        router = router
+            .route("/", get(frontend_index))
+            .route("/{*path}", get(frontend_path));
+    }
+
     router.with_state(state)
 }
 
 impl HttpState {
-    pub fn new(service: ReloadableDictionaryService, metrics: Option<PrometheusHandle>) -> Self {
+    pub fn new(
+        service: ReloadableDictionaryService,
+        metrics: Option<PrometheusHandle>,
+        frontend: Option<FrontendAssets>,
+    ) -> Self {
         Self {
             service,
             metrics,
+            frontend,
             rate_limiter: BasicRateLimiter::default(),
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct FrontendAssets {
+    dist_dir: Arc<PathBuf>,
+}
+
+impl FrontendAssets {
+    pub fn new(dist_dir: PathBuf) -> Option<Self> {
+        dist_dir.join("index.html").exists().then_some(Self {
+            dist_dir: Arc::new(dist_dir),
+        })
+    }
+
+    fn index_path(&self) -> PathBuf {
+        self.dist_dir.join("index.html")
     }
 }
 
@@ -133,8 +165,23 @@ struct SuggestQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct SearchSuggestQuery {
+    q: String,
+    limit: Option<usize>,
+    #[serde(default)]
+    dictionary_id: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct KeyQuery {
     key: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchLookupQuery {
+    key: String,
+    #[serde(default)]
+    dictionary_id: Vec<String>,
 }
 
 async fn healthz() -> Json<HealthResponse> {
@@ -167,6 +214,21 @@ async fn dictionary_detail(
     JsonResponse::json_or_error(snapshot.dictionary_detail(&dictionary_id), &request_id)
 }
 
+async fn suggest_search(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(query): Query<SearchSuggestQuery>,
+) -> impl IntoResponse {
+    let request_id = request_id(&headers);
+    let snapshot = state.service.snapshot().await;
+    JsonResponse::json_or_error(
+        snapshot
+            .search_suggest(query.q, query.limit, query.dictionary_id)
+            .await,
+        &request_id,
+    )
+}
+
 async fn suggest_dictionary(
     Path(dictionary_id): Path<String>,
     State(state): State<HttpState>,
@@ -177,6 +239,19 @@ async fn suggest_dictionary(
     let snapshot = state.service.snapshot().await;
     JsonResponse::json_or_error(
         snapshot.suggest(&dictionary_id, query.q, query.limit).await,
+        &request_id,
+    )
+}
+
+async fn lookup_search(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(query): Query<SearchLookupQuery>,
+) -> impl IntoResponse {
+    let request_id = request_id(&headers);
+    let snapshot = state.service.snapshot().await;
+    JsonResponse::json_or_error(
+        snapshot.search_lookup(query.key, query.dictionary_id).await,
         &request_id,
     )
 }
@@ -211,6 +286,7 @@ async fn entry_content(
                     CACHE_CONTROL,
                     &content.cache_control,
                 );
+                set_entry_security_headers(response.headers_mut());
                 set_header(response.headers_mut(), "x-request-id", &request_id);
                 response
             } else {
@@ -227,8 +303,7 @@ async fn entry_content(
                     CACHE_CONTROL,
                     &content.cache_control,
                 );
-                set_header(response.headers_mut(), CONTENT_SECURITY_POLICY, ENTRY_CSP);
-                set_header(response.headers_mut(), X_CONTENT_TYPE_OPTIONS, "nosniff");
+                set_entry_security_headers(response.headers_mut());
                 set_header(response.headers_mut(), "x-request-id", &request_id);
                 response
             }
@@ -329,6 +404,20 @@ async fn metrics_endpoint(State(state): State<HttpState>, headers: HeaderMap) ->
     }
 }
 
+async fn frontend_index(State(state): State<HttpState>, headers: HeaderMap) -> Response<Body> {
+    let request_id = request_id(&headers);
+    serve_frontend(&state, None, &request_id).await
+}
+
+async fn frontend_path(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(path): Path<String>,
+) -> Response<Body> {
+    let request_id = request_id(&headers);
+    serve_frontend(&state, Some(path), &request_id).await
+}
+
 async fn rate_limit_middleware(
     State(state): State<HttpState>,
     request: Request<Body>,
@@ -353,6 +442,48 @@ async fn rate_limit_middleware(
     }
 }
 
+async fn serve_frontend(
+    state: &HttpState,
+    path: Option<String>,
+    request_id: &str,
+) -> Response<Body> {
+    let Some(frontend) = &state.frontend else {
+        return not_found_response(request_id);
+    };
+
+    if let Some(path) = &path {
+        if reserved_route_path(path) {
+            return not_found_response(request_id);
+        }
+    }
+
+    let Some(asset_path) = resolve_frontend_asset(frontend, path.as_deref()) else {
+        return not_found_response(request_id);
+    };
+
+    let file_path = asset_path.path;
+    match tokio::fs::read(&file_path).await {
+        Ok(bytes) => {
+            let mut response = Response::new(Body::from(bytes));
+            *response.status_mut() = StatusCode::OK;
+            set_header(
+                response.headers_mut(),
+                CONTENT_TYPE,
+                &asset_content_type(&file_path, asset_path.is_index),
+            );
+            set_header(
+                response.headers_mut(),
+                CACHE_CONTROL,
+                asset_cache_control(path.as_deref(), asset_path.is_index),
+            );
+            set_header(response.headers_mut(), X_CONTENT_TYPE_OPTIONS, "nosniff");
+            set_header(response.headers_mut(), "x-request-id", request_id);
+            response
+        }
+        Err(_) => not_found_response(request_id),
+    }
+}
+
 fn maybe_not_modified(headers: &HeaderMap, etag: &str) -> Option<Response<Body>> {
     let if_none_match = headers.get(IF_NONE_MATCH)?.to_str().ok()?;
     let matched = if_none_match
@@ -367,6 +498,11 @@ fn maybe_not_modified(headers: &HeaderMap, etag: &str) -> Option<Response<Body>>
     *response.status_mut() = StatusCode::NOT_MODIFIED;
     set_header(response.headers_mut(), ETAG, etag);
     Some(response)
+}
+
+fn set_entry_security_headers(headers: &mut HeaderMap) {
+    set_header(headers, CONTENT_SECURITY_POLICY, ENTRY_CSP);
+    set_header(headers, X_CONTENT_TYPE_OPTIONS, "nosniff");
 }
 
 fn request_id(headers: &HeaderMap) -> String {
@@ -403,9 +539,92 @@ fn error_response(error: ServiceError, request_id: &str) -> Response<Body> {
     response
 }
 
+fn not_found_response(request_id: &str) -> Response<Body> {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::NOT_FOUND;
+    set_header(response.headers_mut(), "x-request-id", request_id);
+    response
+}
+
 fn set_header(headers: &mut HeaderMap, name: impl axum::http::header::IntoHeaderName, value: &str) {
     if let Ok(value) = HeaderValue::from_str(value) {
         headers.insert(name, value);
+    }
+}
+
+struct FrontendAssetPath {
+    path: PathBuf,
+    is_index: bool,
+}
+
+fn reserved_route_path(path: &str) -> bool {
+    path == "api"
+        || path.starts_with("api/")
+        || path == "healthz"
+        || path == "readyz"
+        || path == "metrics"
+        || path.starts_with("metrics/")
+}
+
+fn resolve_frontend_asset(
+    frontend: &FrontendAssets,
+    path: Option<&str>,
+) -> Option<FrontendAssetPath> {
+    let Some(path) = path.filter(|value| !value.is_empty()) else {
+        return Some(FrontendAssetPath {
+            path: frontend.index_path(),
+            is_index: true,
+        });
+    };
+
+    let relative = sanitize_relative_path(path)?;
+    let candidate = frontend.dist_dir.join(&relative);
+    if candidate.is_file() {
+        return Some(FrontendAssetPath {
+            path: candidate,
+            is_index: false,
+        });
+    }
+
+    (StdPath::new(path).extension().is_none()).then(|| FrontendAssetPath {
+        path: frontend.index_path(),
+        is_index: true,
+    })
+}
+
+fn sanitize_relative_path(path: &str) -> Option<PathBuf> {
+    let relative = StdPath::new(path);
+    let mut sanitized = PathBuf::new();
+
+    for component in relative.components() {
+        match component {
+            Component::Normal(part) => sanitized.push(part),
+            Component::CurDir => {}
+            _ => return None,
+        }
+    }
+
+    (!sanitized.as_os_str().is_empty()).then_some(sanitized)
+}
+
+fn asset_content_type(path: &StdPath, is_index: bool) -> String {
+    if is_index {
+        "text/html; charset=utf-8".to_owned()
+    } else {
+        mime_guess::from_path(path)
+            .first_or_octet_stream()
+            .essence_str()
+            .to_owned()
+    }
+}
+
+fn asset_cache_control(path: Option<&str>, is_index: bool) -> &'static str {
+    if is_index {
+        "no-cache"
+    } else if matches!(path, Some(value) if value.starts_with("assets/")) {
+        "public, max-age=31536000, immutable"
+    } else {
+        "public, max-age=3600"
     }
 }
 
