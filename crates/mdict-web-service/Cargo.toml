@@ -1,0 +1,20 @@
+[package]
+name = "mdict-web-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mdict-web-config = { path = "../mdict-web-config" }
+mdict-web-domain = { path = "../mdict-web-domain" }
+mdict-web-engine = { path = "../mdict-web-engine" }
+metrics.workspace = true
+percent-encoding.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

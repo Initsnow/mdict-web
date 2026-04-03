@@ -1,0 +1,28 @@
+[package]
+name = "mdict-web-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+mdict-web-http = { path = "../mdict-web-http" }
+mdict-web-service = { path = "../mdict-web-service" }
+metrics-exporter-prometheus.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+tempfile.workspace = true
+
+[[bench]]
+name = "lookup"
+harness = false
+
+[lints]
+workspace = true

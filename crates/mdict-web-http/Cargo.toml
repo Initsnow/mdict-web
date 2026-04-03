@@ -1,0 +1,28 @@
+[package]
+name = "mdict-web-http"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+axum.workspace = true
+bytes.workspace = true
+http.workspace = true
+mdict-web-domain = { path = "../mdict-web-domain" }
+mdict-web-service = { path = "../mdict-web-service" }
+metrics-exporter-prometheus.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+http-body-util.workspace = true
+tempfile.workspace = true
+tower.workspace = true
+
+[lints]
+workspace = true

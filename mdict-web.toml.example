@@ -1,0 +1,39 @@
+[server]
+bind = "127.0.0.1:8080"
+blocking_concurrency = 32
+query_length_limit = 512
+request_body_limit_bytes = 32768
+rate_limit_per_second = 200
+
+[catalog]
+manifests_dir = "catalog"
+
+[index]
+dir = "index"
+rebuild_on_startup = false
+
+[cache.entry]
+enabled = false
+max_capacity = 8388608
+
+[cache.resource]
+enabled = false
+max_capacity = 33554432
+max_item_bytes = 524288
+
+[observability]
+metrics_enabled = true
+metrics_path = "/metrics"
+
+[admin]
+reload_token = "change-me"
+
+[[catalog.bundles]]
+dictionary_id = "demo"
+display_name = "Demo Dictionary"
+description = "Example dictionary bundle"
+source_lang = "en"
+target_lang = "en"
+tags = ["demo"]
+mdx_path = "/absolute/path/to/demo.mdx"
+mdd_path = "/absolute/path/to/demo.mdd"

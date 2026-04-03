@@ -1,0 +1,30 @@
+[package]
+name = "mdict-web-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+blake3.workspace = true
+bytes.workspace = true
+lol_html.workspace = true
+mdict-rs.workspace = true
+mdict-web-config = { path = "../mdict-web-config" }
+mdict-web-domain = { path = "../mdict-web-domain" }
+mdict-web-index = { path = "../mdict-web-index" }
+metrics.workspace = true
+mime.workspace = true
+mime_guess.workspace = true
+moka.workspace = true
+percent-encoding.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tracing.workspace = true
+url.workspace = true
+
+[lints]
+workspace = true

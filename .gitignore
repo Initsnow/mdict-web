@@ -1,0 +1,13 @@
+/target
+/.direnv
+/.env
+/.idea
+/.vscode
+*.log
+*.tmp
+*.swp
+*.swo
+*.sqlite3
+*.db
+/index
+/catalog
