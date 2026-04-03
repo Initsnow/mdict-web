@@ -11,3 +11,4 @@
 *.db
 /index
 /catalog
+/mdict-web.toml
