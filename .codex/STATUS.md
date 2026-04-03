@@ -20,6 +20,7 @@
   - 全局多词典 aggregate suggest / lookup
   - exact lookup / suggest / entry content / resource content
   - MDX `@@@LINK=` alias 解析与最终词条跳转
+  - `sound://...` 音频资源 key 到实际 MDD 路径的服务端归一化
   - HTML/CSS 重写与内容安全头
   - sidecar suggest 索引
   - admin reload / healthz / readyz / metrics

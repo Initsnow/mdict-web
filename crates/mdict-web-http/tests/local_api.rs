@@ -324,6 +324,31 @@ async fn local_fixture_http_smoke_test() {
     let resource_text = String::from_utf8(resource_body.to_vec()).expect("resource is utf-8");
     assert!(resource_text.contains("url("), "{resource_text}");
 
+    let audio_resource = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(
+                    "/api/v1/dictionaries/ldoce5pp/resources/content?key=sound%3A%2F%2Fmedia%2Fenglish%2FameProns%2Flaadbuild-up.mp3",
+                )
+                .body(Body::empty())
+                .expect("audio resource request should build"),
+        )
+        .await
+        .expect("audio resource request should succeed");
+    assert_eq!(audio_resource.status(), StatusCode::OK);
+    assert!(
+        audio_resource
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("audio/")),
+    );
+    let audio_resource_body = to_bytes(audio_resource.into_body(), usize::MAX)
+        .await
+        .expect("audio resource body should decode");
+    assert!(!audio_resource_body.is_empty());
+
     let reload_unauthorized = app
         .clone()
         .oneshot(

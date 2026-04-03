@@ -788,23 +788,53 @@ fn resource_key_candidates(raw: &str) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
 
-    let variants = [
-        trimmed.to_owned(),
-        trimmed.trim_start_matches('/').to_owned(),
-        trimmed.trim_start_matches('\\').to_owned(),
-        trimmed.replace('/', "\\"),
-        trimmed.replace('\\', "/"),
-        format!("\\{}", trimmed.trim_start_matches(['/', '\\'])),
-        format!("/{}", trimmed.trim_start_matches(['/', '\\'])),
-    ];
+    let mut bases = vec![trimmed.to_owned()];
+    if let Some(normalized) = special_resource_lookup_base(trimmed) {
+        bases.push(normalized);
+    }
 
-    for variant in variants {
-        if !variant.is_empty() && seen.insert(variant.clone()) {
-            out.push(variant);
+    for base in bases {
+        let normalized = base.trim_start_matches(['/', '\\']);
+        let variants = [
+            base.clone(),
+            normalized.to_owned(),
+            normalized.replace('/', "\\"),
+            normalized.replace('\\', "/"),
+        ];
+
+        for variant in variants {
+            if variant.is_empty() {
+                continue;
+            }
+
+            for candidate in [
+                variant.clone(),
+                format!("\\{variant}"),
+                format!("/{variant}"),
+            ] {
+                if seen.insert(candidate.clone()) {
+                    out.push(candidate);
+                }
+            }
         }
     }
 
     out
+}
+
+fn special_resource_lookup_base(raw: &str) -> Option<String> {
+    let url = Url::parse(raw).ok()?;
+    if url.scheme() != "sound" {
+        return None;
+    }
+
+    let host = url.host_str()?;
+    let path = url.path().trim_start_matches('/');
+    Some(if path.is_empty() {
+        host.to_owned()
+    } else {
+        format!("{host}/{path}")
+    })
 }
 
 fn resolve_mdx_record(
@@ -895,6 +925,14 @@ mod tests {
         assert!(variants.contains(&"images/a.png".to_owned()));
         assert!(variants.contains(&"images\\a.png".to_owned()));
         assert!(variants.contains(&"\\images/a.png".to_owned()));
+        assert!(variants.contains(&"\\images\\a.png".to_owned()));
+    }
+
+    #[test]
+    fn resource_key_candidates_expand_sound_urls() {
+        let variants = resource_key_candidates("sound://media/english/ameProns/laadbuild-up.mp3");
+        assert!(variants.contains(&"media/english/ameProns/laadbuild-up.mp3".to_owned()));
+        assert!(variants.contains(&"\\media\\english\\ameProns\\laadbuild-up.mp3".to_owned()));
     }
 
     #[test]
