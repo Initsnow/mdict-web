@@ -3,82 +3,7 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 
-@custom-variant dark (&:is(.dark *));
-
-@theme {
-  --color-background: hsl(0 0% 100%);
-  --color-foreground: hsl(222.2 84% 4.9%);
-  --color-muted: hsl(210 40% 96.1%);
-  --color-muted-foreground: hsl(215.4 16.3% 46.9%);
-  --color-border: hsl(214.3 31.8% 91.4%);
-  --color-primary: hsl(221.2 83.2% 53.3%);
-  --color-primary-foreground: hsl(210 40% 98%);
-  --color-secondary: hsl(210 40% 96.1%);
-  --color-secondary-foreground: hsl(222.2 47.4% 11.2%);
-  --color-destructive: hsl(0 84.2% 60.2%);
-  --color-card: hsl(0 0% 100%);
-  --color-card-foreground: hsl(222.2 84% 4.9%);
-  --color-popover: hsl(0 0% 100%);
-  --color-popover-foreground: hsl(222.2 84% 4.9%);
-  --color-ring: hsl(221.2 83.2% 53.3%);
-  --color-accent: hsl(210 40% 96.1%);
-  --color-accent-foreground: hsl(222.2 47.4% 11.2%);
-
-  --font-sans: "Inter", "SF Pro Display", system-ui, -apple-system, sans-serif;
-  --radius: 0.5rem;
-}
-
-@media (prefers-color-scheme: dark) {
-  @theme {
-    --color-background: hsl(222.2 84% 4.9%);
-    --color-foreground: hsl(210 40% 98%);
-    --color-muted: hsl(217.2 32.6% 17.5%);
-    --color-muted-foreground: hsl(215 20.2% 65.1%);
-    --color-border: hsl(217.2 32.6% 17.5%);
-    --color-primary: hsl(217.2 91.2% 59.8%);
-    --color-primary-foreground: hsl(222.2 47.4% 11.2%);
-    --color-secondary: hsl(217.2 32.6% 17.5%);
-    --color-secondary-foreground: hsl(210 40% 98%);
-    --color-destructive: hsl(0 62.8% 30.6%);
-    --color-card: hsl(222.2 84% 4.9%);
-    --color-card-foreground: hsl(210 40% 98%);
-    --color-popover: hsl(222.2 84% 4.9%);
-    --color-popover-foreground: hsl(210 40% 98%);
-    --color-accent: hsl(217.2 32.6% 17.5%);
-    --color-accent-foreground: hsl(210 40% 98%);
-  }
-}
-
-html {
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-body {
-  background-color: var(--color-background);
-  color: var(--color-foreground);
-  font-family: var(--font-sans);
-}
-
-* {
-  border-color: var(--color-border);
-}
-
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: hsl(215 20% 75%);
-  border-radius: 999px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: hsl(215 20% 60%);
-}
+@custom-variant dark (@media (prefers-color-scheme: dark));
 
 @theme inline {
   --font-heading: var(--font-sans);
@@ -158,7 +83,8 @@ body {
   --sidebar-ring: oklch(0.708 0 0);
 }
 
-.dark {
+@media (prefers-color-scheme: dark) {
+  :root {
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
@@ -190,6 +116,36 @@ body {
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  }
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(215 20% 75%);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(215 20% 60%);
+}
+@media (prefers-color-scheme: dark) {
+  ::-webkit-scrollbar-thumb {
+    background: hsl(215 15% 35%);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(215 15% 45%);
+  }
 }
 
 @layer base {

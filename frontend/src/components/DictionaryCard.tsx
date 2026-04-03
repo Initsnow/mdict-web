@@ -1,7 +1,4 @@
-import { BookOpen, Globe, Hash, ChevronRight } from "lucide-react";
-import { Link } from "react-router-dom";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { BookOpen } from "lucide-react";
 import type { DictionarySummary } from "@/types/api";
 import { cn } from "@/lib/utils";
 
@@ -10,95 +7,55 @@ interface DictionaryCardProps {
   className?: string;
 }
 
-function statusClassName(status: DictionarySummary["status"]) {
-  switch (status) {
-    case "ready":
-      return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400";
-    case "loading":
-      return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400";
-    default:
-      return undefined; // destructive variant handles it
-  }
-}
+const statusDot: Record<DictionarySummary["status"], string> = {
+  ready: "bg-emerald-500",
+  loading: "bg-amber-400 animate-pulse",
+  unavailable: "bg-muted-foreground/40",
+  error: "bg-destructive",
+};
 
-function statusLabel(status: DictionarySummary["status"]) {
-  switch (status) {
-    case "ready":      return "Ready";
-    case "loading":    return "Loading";
-    case "unavailable": return "Unavailable";
-    case "error":      return "Error";
-  }
-}
+const statusText: Record<DictionarySummary["status"], string> = {
+  ready: "Ready",
+  loading: "Loading",
+  unavailable: "Unavailable",
+  error: "Error",
+};
 
 export function DictionaryCard({ dictionary, className }: DictionaryCardProps) {
-  const isReady = dictionary.status === "ready";
-  const isError = dictionary.status === "unavailable" || dictionary.status === "error";
+  const langLabel =
+    dictionary.source_lang && dictionary.target_lang !== dictionary.source_lang
+      ? `${dictionary.source_lang} → ${dictionary.target_lang}`
+      : dictionary.source_lang || null;
 
   return (
-    <Link
-      to={`/dictionaries/${encodeURIComponent(dictionary.dictionary_id)}`}
+    <div
       className={cn(
-        "group block rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        !isReady && "pointer-events-none opacity-60",
+        "flex items-center gap-3 px-4 py-3",
+        dictionary.status !== "ready" && "opacity-50",
         className
       )}
-      aria-disabled={!isReady}
     >
-      <Card className="transition-all duration-200 group-hover:shadow-md group-hover:-translate-y-0.5">
-        <CardContent className="flex flex-col gap-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex items-start gap-3 min-w-0">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                <BookOpen className="h-5 w-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <h3 className="font-semibold text-sm leading-tight truncate">
-                  {dictionary.display_name}
-                </h3>
-                {dictionary.description && (
-                  <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2 leading-relaxed">
-                    {dictionary.description}
-                  </p>
-                )}
-              </div>
-            </div>
-            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 mt-0.5" />
-          </div>
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+        <BookOpen className="h-4 w-4" />
+      </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge
-              variant={isError ? "destructive" : "secondary"}
-              className={statusClassName(dictionary.status)}
-            >
-              {statusLabel(dictionary.status)}
-            </Badge>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">{dictionary.display_name}</p>
+        {dictionary.description && (
+          <p className="truncate text-xs text-muted-foreground">
+            {dictionary.description}
+          </p>
+        )}
+      </div>
 
-            {(dictionary.source_lang || dictionary.target_lang) && (
-              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                <Globe className="h-3 w-3" />
-                {dictionary.source_lang}
-                {dictionary.target_lang !== dictionary.source_lang &&
-                  ` → ${dictionary.target_lang}`}
-              </span>
-            )}
-
-            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-              <Hash className="h-3 w-3" />
-              {dictionary.entry_count.toLocaleString()} entries
-            </span>
-          </div>
-
-          {dictionary.tags.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {dictionary.tags.map((tag) => (
-                <Badge key={tag} variant="outline" className="text-xs">
-                  {tag}
-                </Badge>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </Link>
+      <div className="hidden items-center gap-4 text-xs text-muted-foreground sm:flex">
+        {langLabel && <span>{langLabel}</span>}
+        <span className="tabular-nums">{dictionary.entry_count.toLocaleString()} entries</span>
+        <span className="flex items-center gap-1.5">
+          <span className={cn("inline-block h-1.5 w-1.5 rounded-full", statusDot[dictionary.status])} />
+          {statusText[dictionary.status]}
+        </span>
+      </div>
+    </div>
   );
 }

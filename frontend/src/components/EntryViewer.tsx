@@ -25,21 +25,19 @@ export function EntryViewer({ contentUrl, className }: EntryViewerProps) {
     return (
       <div
         className={cn(
-          "flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-muted/30 text-muted-foreground select-none",
+          "flex items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground select-none",
           className
         )}
       >
-        <div className="flex flex-col items-center gap-3 p-12 text-center">
-          <span className="text-4xl">📖</span>
-          <p className="text-sm font-medium">Search for a word to get started</p>
-          <p className="text-xs opacity-60">Type in the search box above</p>
+        <div className="text-center">
+          <p className="text-sm">Search for a word to get started</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className={cn("relative overflow-hidden rounded-xl border border-border", className)}>
+    <div className={cn("relative overflow-hidden rounded-lg border border-border", className)}>
       {loading && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80 backdrop-blur-sm">
           <div className="flex flex-col items-center gap-2">

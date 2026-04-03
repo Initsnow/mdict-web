@@ -109,7 +109,7 @@ export function GlobalSearchBar({
           onBlur={() => setTimeout(() => setOpen(false), 120)}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
-          className="h-14 rounded-2xl border-border/70 bg-background/90 pl-11 pr-10 text-base shadow-[0_18px_45px_-28px_rgba(15,23,42,0.35)] focus-visible:ring-primary/40"
+          className="h-12 rounded-xl border-border bg-background pl-11 pr-10 text-base shadow-sm focus-visible:ring-primary/40"
           aria-autocomplete="list"
           aria-expanded={open && hasSuggestions}
           role="combobox"
@@ -137,8 +137,8 @@ export function GlobalSearchBar({
         <ul
           role="listbox"
           className={cn(
-            "absolute z-50 mt-2 w-full overflow-hidden rounded-2xl border border-border/70 bg-popover text-popover-foreground shadow-2xl",
-            "max-h-80 overflow-y-auto py-1.5"
+            "absolute z-50 mt-1.5 w-full overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg",
+            "max-h-72 overflow-y-auto py-1"
           )}
         >
           {suggestions.map((item, index) => {
