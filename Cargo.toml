@@ -29,7 +29,7 @@ futures-core = "0.3"
 http = "1.3"
 http-body-util = "0.1"
 lol_html = "2.7"
-mdict-rs = { path = "../mdict-rs" }
+mdict-rs = { version = "0.1.1", path = "../mdict-rs" }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.17"
 mime = "0.3"
