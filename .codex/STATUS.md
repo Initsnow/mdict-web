@@ -21,6 +21,7 @@
   - exact lookup / suggest / entry content / resource content
   - MDX `@@@LINK=` alias 解析与最终词条跳转
   - `sound://...` 音频资源 key 到实际 MDD 路径的服务端归一化
+  - 前端 iframe 词条查看器会拦截音频资源链接并在原位播放，不再导航到默认浏览器播放器
   - HTML/CSS 重写与内容安全头
   - sidecar suggest 索引
   - admin reload / healthz / readyz / metrics
