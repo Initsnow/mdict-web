@@ -19,6 +19,7 @@
   - 词典 catalog / list / detail
   - 全局多词典 aggregate suggest / lookup
   - exact lookup / suggest / entry content / resource content
+  - MDX `@@@LINK=` alias 解析与最终词条跳转
   - HTML/CSS 重写与内容安全头
   - sidecar suggest 索引
   - admin reload / healthz / readyz / metrics
@@ -82,6 +83,17 @@
 - 这是 warm path 小样本结果，适合作为当前回归基线，不代表最终容量上限
 - 资源与缓存收益 benchmark 仍需补齐
 - `cargo test --workspace` 中的真实词典 HTTP smoke test 当前已覆盖新的全局多词典搜索接口与静态前端托管路径，并在本地样本上通过
+
+2026-04-04 为 `@@@LINK=` alias resolve 多次重复执行同一命令：
+
+- `lookup/ldoce_apple`: `952.88 µs .. 1.1777 ms`
+- `lookup/ldoce_suggest_app`: `8.0027 µs .. 8.9180 µs`
+- `lookup/ldoce_entry_content_apple`: `4.6189 ms .. 7.3158 ms`
+
+说明：
+
+- 这次仍是短样本测量，同日多次重复的波动已经足够大，暂不把单次 change 判定直接视为稳定回归或稳定提升
+- 如果后续要对 alias resolve 的性能影响做结论，需要增大 sample size / measurement time 后再看
 
 ## 实现约束
 

@@ -29,6 +29,8 @@ const ENTRY_CACHE_CONTROL: &str = "public, max-age=60";
 const RESOURCE_CACHE_CONTROL: &str = "public, max-age=86400";
 const ENTRY_RENDER_VERSION: &str = "entry-html-v1";
 const RESOURCE_RENDER_VERSION: &str = "resource-v1";
+const ENTRY_LINK_PREFIX: &str = "@@@LINK=";
+const MAX_ENTRY_REDIRECT_DEPTH: usize = 8;
 
 #[derive(Debug)]
 pub struct LoadedDictionary {
@@ -52,6 +54,7 @@ pub struct DictionaryEngine {
 #[derive(Debug, Clone)]
 pub struct LookupArtifact {
     pub resolved_key: String,
+    pub redirected_from: Option<String>,
     pub match_type: LookupMatchType,
     pub etag: String,
     pub has_resources: bool,
@@ -74,6 +77,13 @@ struct CachedResource {
     bytes: Bytes,
     etag: String,
     cache_control: String,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedMdxRecord {
+    matched_key: String,
+    redirected_from: Option<String>,
+    record: MdxRecord,
 }
 
 impl LoadedDictionary {
@@ -189,19 +199,20 @@ impl DictionaryEngine {
         let record = self
             .lookup_record(dictionary.clone(), query_key.clone())
             .await?;
-        let match_type = if record.key == query_key {
+        let match_type = if record.matched_key == query_key {
             LookupMatchType::Exact
         } else {
             LookupMatchType::Normalized
         };
 
         Ok(LookupArtifact {
-            resolved_key: record.key.clone(),
+            resolved_key: record.record.key.clone(),
+            redirected_from: record.redirected_from.clone(),
             match_type,
             etag: entry_etag(
                 &dictionary_id,
                 &dictionary.version_tag,
-                &record.key,
+                &record.record.key,
                 ENTRY_RENDER_VERSION,
             ),
             has_resources: dictionary.mdd.is_some(),
@@ -215,7 +226,7 @@ impl DictionaryEngine {
     ) -> Result<RenderedEntryContent, ServiceError> {
         let dictionary_id = dictionary.manifest.dictionary_id.clone();
         let record = self.lookup_record(dictionary.clone(), query_key).await?;
-        let cache_key = format!("{dictionary_id}:{}", record.key);
+        let cache_key = format!("{dictionary_id}:{}", record.record.key);
 
         if let Some(cache) = &self.entry_cache {
             if let Some(cached) = cache.get(&cache_key) {
@@ -225,15 +236,15 @@ impl DictionaryEngine {
             counter!("mdict_web_entry_cache_misses_total").increment(1);
         }
 
-        let html = rewrite_entry_html(&dictionary_id, &record.text)?;
+        let html = rewrite_entry_html(&dictionary_id, &record.record.text)?;
         let content = RenderedEntryContent {
             dictionary_id: dictionary_id.clone(),
-            resolved_key: record.key.clone(),
+            resolved_key: record.record.key.clone(),
             html,
             etag: entry_etag(
                 &dictionary_id,
                 &dictionary.version_tag,
-                &record.key,
+                &record.record.key,
                 ENTRY_RENDER_VERSION,
             ),
             cache_control: ENTRY_CACHE_CONTROL.to_owned(),
@@ -311,16 +322,10 @@ impl DictionaryEngine {
         &self,
         dictionary: Arc<LoadedDictionary>,
         query_key: String,
-    ) -> Result<MdxRecord, ServiceError> {
+    ) -> Result<ResolvedMdxRecord, ServiceError> {
         let dictionary_id = dictionary.manifest.dictionary_id.clone();
         self.run_blocking("entry_lookup", move || {
-            dictionary
-                .mdx
-                .lookup(&query_key)
-                .map_err(|error| {
-                    ServiceError::dictionary_unavailable(&dictionary_id, error.to_string())
-                })?
-                .ok_or_else(|| ServiceError::entry_not_found(&dictionary_id, &query_key))
+            resolve_mdx_record(dictionary, &dictionary_id, &query_key)
         })
         .await
     }
@@ -802,6 +807,75 @@ fn resource_key_candidates(raw: &str) -> Vec<String> {
     out
 }
 
+fn resolve_mdx_record(
+    dictionary: Arc<LoadedDictionary>,
+    dictionary_id: &str,
+    query_key: &str,
+) -> Result<ResolvedMdxRecord, ServiceError> {
+    let mut current_query = query_key.to_owned();
+    let mut matched_key = None;
+    let mut redirected_from = None;
+    let mut visited = HashSet::new();
+
+    for depth in 0..=MAX_ENTRY_REDIRECT_DEPTH {
+        let maybe_record = dictionary.mdx.lookup(&current_query).map_err(|error| {
+            ServiceError::dictionary_unavailable(dictionary_id, error.to_string())
+        })?;
+        let Some(record) = maybe_record else {
+            return if redirected_from.is_some() {
+                Err(ServiceError::internal(format!(
+                    "entry redirect target `{current_query}` was not found in dictionary `{dictionary_id}` for query `{query_key}`"
+                )))
+            } else {
+                Err(ServiceError::entry_not_found(dictionary_id, &current_query))
+            };
+        };
+
+        if matched_key.is_none() {
+            matched_key = Some(record.key.clone());
+        }
+
+        let Some(target) = entry_link_target(&record.text) else {
+            return Ok(ResolvedMdxRecord {
+                matched_key: matched_key.unwrap_or_else(|| record.key.clone()),
+                redirected_from,
+                record,
+            });
+        };
+
+        if redirected_from.is_none() {
+            redirected_from = Some(record.key.clone());
+        }
+
+        if depth == MAX_ENTRY_REDIRECT_DEPTH {
+            return Err(ServiceError::internal(format!(
+                "entry redirect chain exceeded {MAX_ENTRY_REDIRECT_DEPTH} hops in dictionary `{dictionary_id}` for query `{query_key}`"
+            )));
+        }
+
+        if !visited.insert(record.key.clone()) {
+            return Err(ServiceError::internal(format!(
+                "entry redirect loop detected in dictionary `{dictionary_id}` for query `{query_key}`"
+            )));
+        }
+
+        current_query = target;
+    }
+
+    Err(ServiceError::internal(format!(
+        "entry redirect resolution failed in dictionary `{dictionary_id}` for query `{query_key}`"
+    )))
+}
+
+fn entry_link_target(text: &str) -> Option<String> {
+    let trimmed = text.trim_matches(|ch: char| ch.is_whitespace() || ch == '\0');
+    trimmed
+        .strip_prefix(ENTRY_LINK_PREFIX)
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+        .map(str::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -821,5 +895,21 @@ mod tests {
         assert!(variants.contains(&"images/a.png".to_owned()));
         assert!(variants.contains(&"images\\a.png".to_owned()));
         assert!(variants.contains(&"\\images/a.png".to_owned()));
+    }
+
+    #[test]
+    fn entry_link_target_parses_redirect_records() {
+        assert_eq!(
+            entry_link_target("@@@LINK=build up\r\n"),
+            Some("build up".to_owned())
+        );
+    }
+
+    #[test]
+    fn entry_link_target_ignores_normal_html() {
+        assert_eq!(
+            entry_link_target("<link href=\"LM5style.css\" rel=\"stylesheet\" />"),
+            None
+        );
     }
 }

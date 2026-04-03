@@ -55,6 +55,7 @@ export interface LookupResult {
   dictionary_id: string;
   query_key: string;
   resolved_key: string;
+  redirected_from?: string;
   match_type: MatchType;
   has_resources: boolean;
   content_url: string;

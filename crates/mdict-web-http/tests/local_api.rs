@@ -166,6 +166,31 @@ async fn local_fixture_http_smoke_test() {
         "{lookup_text}"
     );
 
+    let redirect_lookup = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/dictionaries/ldoce5pp/entries/lookup?key=build-up")
+                .body(Body::empty())
+                .expect("redirect lookup request should build"),
+        )
+        .await
+        .expect("redirect lookup request should succeed");
+    assert_eq!(redirect_lookup.status(), StatusCode::OK);
+    let redirect_lookup_body = to_bytes(redirect_lookup.into_body(), usize::MAX)
+        .await
+        .expect("redirect lookup body should decode");
+    let redirect_lookup_text =
+        String::from_utf8(redirect_lookup_body.to_vec()).expect("redirect lookup body is utf-8");
+    assert!(
+        redirect_lookup_text.contains("\"resolved_key\":\"build up\""),
+        "{redirect_lookup_text}"
+    );
+    assert!(
+        redirect_lookup_text.contains("\"redirected_from\":\"build-up\""),
+        "{redirect_lookup_text}"
+    );
+
     let search_lookup = app
         .clone()
         .oneshot(
@@ -226,6 +251,32 @@ async fn local_fixture_http_smoke_test() {
         "{content_text}"
     );
     assert!(!content_text.to_ascii_lowercase().contains("<script"));
+
+    let redirect_content = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/dictionaries/ldoce5pp/entries/content?key=build-up")
+                .body(Body::empty())
+                .expect("redirect content request should build"),
+        )
+        .await
+        .expect("redirect content request should succeed");
+    assert_eq!(redirect_content.status(), StatusCode::OK);
+    let redirect_content_body = to_bytes(redirect_content.into_body(), usize::MAX)
+        .await
+        .expect("redirect content body should decode");
+    let redirect_content_text =
+        String::from_utf8(redirect_content_body.to_vec()).expect("redirect content body is utf-8");
+    assert!(
+        !redirect_content_text.contains("@@@LINK="),
+        "{redirect_content_text}"
+    );
+    assert!(
+        redirect_content_text
+            .contains("/api/v1/dictionaries/ldoce5pp/resources/content?key=LM5style%2Ecss"),
+        "{redirect_content_text}"
+    );
 
     let content_not_modified = app
         .clone()

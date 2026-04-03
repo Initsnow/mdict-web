@@ -254,6 +254,8 @@ pub struct LookupResult {
     pub dictionary_id: String,
     pub query_key: String,
     pub resolved_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redirected_from: Option<String>,
     pub match_type: LookupMatchType,
     pub has_resources: bool,
     pub content_url: String,

@@ -112,6 +112,22 @@
 ```json
 {
   "dictionary_id": "oald10",
+  "query_key": "build-up",
+  "resolved_key": "build up",
+  "redirected_from": "build-up",
+  "match_type": "exact",
+  "has_resources": true,
+  "content_url": "/api/v1/dictionaries/oald10/entries/content?key=build%20up",
+  "resource_url_template": "/api/v1/dictionaries/oald10/resources/content?key={resource_key}",
+  "etag": "\"entry:oald10:build up:...\""
+}
+```
+
+非 redirect 命中示例：
+
+```json
+{
+  "dictionary_id": "oald10",
   "query_key": "apple",
   "resolved_key": "apple",
   "match_type": "exact",
@@ -125,8 +141,9 @@
 说明：
 
 - `query_key`: 用户原始查询
-- `resolved_key`: 后端最终命中的 canonical key
-- `match_type`: `exact | normalized`
+- `resolved_key`: 后端最终用于返回内容的 key；若命中 `@@@LINK=` alias，则这里是最终跳转目标
+- `redirected_from`: 可选；当命中 alias record 并跳到其他词条时返回原 alias key
+- `match_type`: `exact | normalized`，描述用户查询与首次命中的词典 key 之间的匹配关系，不描述 redirect
 - `content_url`: 词条 HTML 内容地址
 - `resource_url_template`: 前端或重写逻辑可参考的资源模板
 
@@ -329,13 +346,14 @@
 ```json
 {
   "dictionary_id": "oald10",
-  "query_key": "Apple",
-  "resolved_key": "apple",
-  "match_type": "normalized",
+  "query_key": "build-up",
+  "resolved_key": "build up",
+  "redirected_from": "build-up",
+  "match_type": "exact",
   "has_resources": true,
-  "content_url": "/api/v1/dictionaries/oald10/entries/content?key=apple",
+  "content_url": "/api/v1/dictionaries/oald10/entries/content?key=build%20up",
   "resource_url_template": "/api/v1/dictionaries/oald10/resources/content?key={resource_key}",
-  "etag": "\"entry:oald10:apple:6f91...\""
+  "etag": "\"entry:oald10:build up:6f91...\""
 }
 ```
 
@@ -343,6 +361,11 @@
 
 - 返回 `404`
 - `error.code = "entry_not_found"`
+
+说明：
+
+- 若首次命中的 record 正文是 `@@@LINK={target}`，后端会在有界深度内解析 redirect 链并返回最终目标词条
+- 这不是 HTTP 302；客户端始终收到 JSON lookup 结果
 
 ### 3.8 词条 HTML 内容
 
@@ -359,7 +382,7 @@
 
 响应体：
 
-- 已重写的词条 HTML
+- 已重写的词条 HTML；若 `key` 命中的是 `@@@LINK=` alias，则直接返回最终目标词条的 HTML
 - 不包含可执行脚本
 
 前端约定：
