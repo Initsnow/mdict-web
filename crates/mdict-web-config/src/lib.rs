@@ -161,9 +161,19 @@ pub struct DictionaryBundleManifest {
     #[serde(default)]
     pub mdd_path: Option<PathBuf>,
     #[serde(default)]
+    pub entry_script_mode: EntryScriptMode,
+    #[serde(default)]
     pub passcode: Option<PasscodeConfig>,
     #[serde(default)]
     pub metadata: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryScriptMode {
+    #[default]
+    None,
+    Original,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,6 +242,10 @@ impl AppConfig {
 impl DictionaryBundleManifest {
     pub fn has_resources(&self) -> bool {
         self.mdd_path.is_some()
+    }
+
+    pub fn allows_dictionary_scripts(&self) -> bool {
+        matches!(self.entry_script_mode, EntryScriptMode::Original)
     }
 
     pub fn open_options(&self) -> OpenOptions {
@@ -401,6 +415,7 @@ mod tests {
                 tags: vec![],
                 mdx_path: PathBuf::from("/tmp/demo.mdx"),
                 mdd_path: None,
+                entry_script_mode: EntryScriptMode::None,
                 passcode: None,
                 metadata: BTreeMap::new(),
             },
@@ -413,6 +428,7 @@ mod tests {
                 tags: vec![],
                 mdx_path: PathBuf::from("/tmp/demo-2.mdx"),
                 mdd_path: None,
+                entry_script_mode: EntryScriptMode::None,
                 passcode: None,
                 metadata: BTreeMap::new(),
             },

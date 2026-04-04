@@ -254,8 +254,6 @@ async fn local_fixture_http_smoke_test() {
         content_text.contains("/api/v1/dictionaries/ldoce5pp/entries/content?key=apple%20polisher"),
         "{content_text}"
     );
-    assert!(content_text.contains("data-audio-href="), "{content_text}");
-    assert!(content_text.contains("<script>"), "{content_text}");
     assert!(
         content_text.contains("class=\"speaker brefile fa fa-volume-up\""),
         "{content_text}"
@@ -269,6 +267,52 @@ async fn local_fixture_http_smoke_test() {
     assert!(
         content_text.contains("const audio = new Audio()"),
         "{content_text}"
+    );
+
+    let original_mode_content = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/dictionaries/ldoce5pp_alt/entries/content?key=Apple")
+                .body(Body::empty())
+                .expect("original mode content request should build"),
+        )
+        .await
+        .expect("original mode content request should succeed");
+    assert_eq!(original_mode_content.status(), StatusCode::OK);
+    assert_eq!(
+        original_mode_content
+            .headers()
+            .get("content-security-policy")
+            .and_then(|value| value.to_str().ok()),
+        Some(
+            "default-src 'none'; script-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; connect-src 'none'"
+        )
+    );
+    let original_mode_content_body = to_bytes(original_mode_content.into_body(), usize::MAX)
+        .await
+        .expect("original mode content body should decode");
+    let original_mode_content_text = String::from_utf8(original_mode_content_body.to_vec())
+        .expect("original mode content body is utf-8");
+    assert!(
+        original_mode_content_text.contains("<script src="),
+        "{original_mode_content_text}"
+    );
+    assert!(
+        original_mode_content_text.contains("const audio = new Audio()"),
+        "{original_mode_content_text}"
+    );
+    assert!(
+        original_mode_content_text.contains(
+            "data-audio-href=\"/api/v1/dictionaries/ldoce5pp_alt/resources/content?key=%73%6F%75%6E%64%3A"
+        ),
+        "{original_mode_content_text}"
+    );
+    assert!(
+        !original_mode_content_text.contains(
+            "data-audio-href=\"/api/v1/dictionaries/ldoce5pp_alt/resources/content?key=sound%3A"
+        ),
+        "{original_mode_content_text}"
     );
 
     let redirect_content = app
@@ -342,6 +386,7 @@ async fn local_fixture_http_smoke_test() {
         .expect("resource body should decode");
     let resource_text = String::from_utf8(resource_body.to_vec()).expect("resource is utf-8");
     assert!(resource_text.contains("url("), "{resource_text}");
+    assert!(resource_text.contains("optima%2Ewoff2"), "{resource_text}");
 
     let audio_resource = app
         .clone()
@@ -446,12 +491,14 @@ dictionary_id = "ldoce5pp"
 display_name = "LDOCE5++"
 mdx_path = "{}"
 mdd_path = "{}"
+entry_script_mode = "none"
 
 [[catalog.bundles]]
 dictionary_id = "ldoce5pp_alt"
 display_name = "LDOCE5++ Alt"
 mdx_path = "{}"
 mdd_path = "{}"
+entry_script_mode = "original"
 "#,
         dir.join("index").display(),
         mdx_path.display(),

@@ -146,6 +146,7 @@ mdict-web/
 - 显示名、语言、标签
 - `mdx_path`
 - 可选 `mdd_path`
+- `entry_script_mode = none | original`，默认 `none`
 - 可选 passcode
 - 可选额外前端展示元信息
 
@@ -270,17 +271,18 @@ MDict 文件和其中 HTML/资源都视为不可信输入。
 后端必须做：
 
 - 重写相对资源路径到受控资源 API
-- 移除 `<script>`、内联事件处理器、危险 URL scheme
+- 默认移除 `<script>`、内联事件处理器、危险 URL scheme
 - 对样式中的 `url(...)` 做受控重写
+- 对音频资源链接改写为非导航属性，并在 entry HTML 内按需注入最小播放 runtime，阻止默认导航并原位播放
 
 前端必须做：
 
 - 默认在 sandboxed iframe 中渲染词条
-- 不授予脚本执行权限
+- iframe 需要兼容 `entry_script_mode = "original"` 的脚本执行，但默认词典不导入脚本
 
 ### 7.3 资源访问层
 
-- 资源读取只能命中当前词典 bundle 的 MDD 内容
+- 若 MDX 同目录下存在同名 `.css` / `.js` sidecar 文件，则优先于 MDD 命中；其他资源仍保持 MDD 优先，不允许扩展到任意宿主文件
 - 不允许把词条中的路径解释为宿主文件系统路径
 - 返回二进制时设置 `X-Content-Type-Options: nosniff`
 - 大资源必须支持 streaming 和缓存控制
@@ -358,7 +360,7 @@ API 合同以 `docs/API_CONTRACT.md` 为准。
 完成标准：
 
 - 一个包含图片/CSS 的实际词典可在前端正常展示
-- 不允许脚本执行
+- 默认不导入词典脚本；如显式开启 `entry_script_mode = "original"`，则仅在 sandboxed iframe 内执行
 
 ### M3. sidecar 联想索引
 
@@ -464,7 +466,7 @@ API 合同以 `docs/API_CONTRACT.md` 为准。
 - 已实现 TOML 配置加载与 `DictionaryBundle` manifest
 - 已实现 catalog、词典列表、详情、healthz、readyz
 - 已实现 exact lookup、entry HTML content、resource content
-- 已实现 HTML/CSS 重写、脚本移除、事件属性剥离、资源 URL 重写
+- 已实现 HTML/CSS 重写、按词典配置切换的脚本保留/移除、资源 URL 重写
 - 已实现基于 `fst` 的 sidecar suggest 索引，请求路径不再在线扫描全词典
 - 已实现 admin reload、request id、基础全局限流、Prometheus metrics
 - 已实现可选 entry/resource cache，默认关闭，带容量上限和命中计数

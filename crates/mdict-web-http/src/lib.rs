@@ -21,7 +21,9 @@ use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetReques
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
 
-const ENTRY_CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; connect-src 'none'";
+const ENTRY_CSP_NO_SCRIPTS: &str = "default-src 'none'; script-src 'none'; img-src 'self' data: blob:; media-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; connect-src 'none'";
+const ENTRY_CSP_RUNTIME_ONLY: &str = "default-src 'none'; script-src 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; connect-src 'none'";
+const ENTRY_CSP_ORIGINAL_SCRIPTS: &str = "default-src 'none'; script-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; connect-src 'none'";
 
 #[derive(Clone)]
 pub struct HttpState {
@@ -286,7 +288,11 @@ async fn entry_content(
                     CACHE_CONTROL,
                     &content.cache_control,
                 );
-                set_entry_security_headers(response.headers_mut());
+                set_entry_security_headers(
+                    response.headers_mut(),
+                    content.allow_dictionary_scripts,
+                    content.allow_entry_runtime,
+                );
                 set_header(response.headers_mut(), "x-request-id", &request_id);
                 response
             } else {
@@ -303,7 +309,11 @@ async fn entry_content(
                     CACHE_CONTROL,
                     &content.cache_control,
                 );
-                set_entry_security_headers(response.headers_mut());
+                set_entry_security_headers(
+                    response.headers_mut(),
+                    content.allow_dictionary_scripts,
+                    content.allow_entry_runtime,
+                );
                 set_header(response.headers_mut(), "x-request-id", &request_id);
                 response
             }
@@ -500,8 +510,19 @@ fn maybe_not_modified(headers: &HeaderMap, etag: &str) -> Option<Response<Body>>
     Some(response)
 }
 
-fn set_entry_security_headers(headers: &mut HeaderMap) {
-    set_header(headers, CONTENT_SECURITY_POLICY, ENTRY_CSP);
+fn set_entry_security_headers(
+    headers: &mut HeaderMap,
+    allow_dictionary_scripts: bool,
+    allow_entry_runtime: bool,
+) {
+    let csp = if allow_dictionary_scripts {
+        ENTRY_CSP_ORIGINAL_SCRIPTS
+    } else if allow_entry_runtime {
+        ENTRY_CSP_RUNTIME_ONLY
+    } else {
+        ENTRY_CSP_NO_SCRIPTS
+    };
+    set_header(headers, CONTENT_SECURITY_POLICY, csp);
     set_header(headers, X_CONTENT_TYPE_OPTIONS, "nosniff");
 }
 

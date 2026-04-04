@@ -22,7 +22,9 @@
   - MDX `@@@LINK=` alias 解析与最终词条跳转
   - 词条 HTML 中的 `entry://...` 交叉引用会重写到同词典 `entries/content`，不再误走资源接口
   - `sound://...` 音频资源 key 到实际 MDD 路径的服务端归一化
-  - 词条 HTML 中的音频链接会被后端重写为 `data-audio-href`；仅在词条真的包含音频链接时才注入自有 iframe 运行时，在词条页内部原位播放，不再导航到默认浏览器播放器
+  - 同名 `.css` / `.js` 资源会优先使用 MDX 同目录下的 sidecar 文件，而不是 MDD 中的同名资源
+  - `DictionaryBundle` manifest 现支持 `entry_script_mode = none | original`：`none` 默认移除词典脚本 / 事件属性 / `javascript:` 链接，`original` 则保留词典原始脚本并放宽词条页 CSP 到允许同源脚本
+  - 词条 HTML 中的音频链接会改写到 `data-audio-href` 非导航属性；后端会按需注入极小播放 runtime，避免跳到浏览器默认媒体页
   - HTML/CSS 重写与内容安全头
   - sidecar suggest 索引
   - admin reload / healthz / readyz / metrics
@@ -68,6 +70,9 @@
 - 大二进制资源现在会按 chunk 返回，但 CSS 等需重写资源仍会整块处理
 - 如果以后进一步放大应用层缓存，需要持续验证收益是否真的高于额外内存占用
 - 当前全局 lookup 结果按词典遍历顺序返回，尚未引入更细的跨词典排序策略
+- `entry_script_mode = "original"` 会显著放宽词条安全边界，只适合用户显式信任的词典
+- `entry_script_mode = "original"` 下，词典原始脚本还可能引用并不存在于 MDD 且也不在 MDX 同目录 `.css` / `.js` sidecar 范围内的 companion 文件；这类 404 仍需要按具体词典评估
+- 词典原始脚本对音频点击的默认行为并不可靠；当前浏览器侧依赖 entry HTML 内按需注入的最小播放 runtime 来消费 `data-audio-href`
 
 ## 基准记录
 
@@ -119,6 +124,61 @@
 
 - 这次修复把词条 HTML 里的 `entry://...` 链接从错误的资源接口改写为同词典 `entries/content`
 - `entry_content` 在短样本下没有统计显著变化；`suggest` 出现回归而 `lookup` 出现改善，这类短样本波动仍然偏大，暂不把这次结果直接当成稳定性能结论
+
+2026-04-04 为 `entry-html-v4` 自有折叠运行时再次执行同一命令：
+
+- `lookup/ldoce_apple`: `1.0055 ms .. 1.0158 ms`
+- `lookup/ldoce_suggest_app`: `8.6198 µs .. 8.7920 µs`
+- `lookup/ldoce_entry_content_apple`: `6.6878 ms .. 7.0645 ms`
+
+说明：
+
+- 这次修复继续维持“移除词典原始脚本”的安全边界，但对已知的 LDOCE 折叠结构注入自有极小运行时，恢复 `LDOCE5pp_sensefold` / `lm5ppBox` 展开与收起，同时保留原有音频原位播放
+- 短样本下 `lookup` 回归、`suggest` 与 `entry_content` 改善；波动仍然存在，但这次 `entry_content` 没有出现前一版音频运行时那样的更重回归
+
+2026-04-04 为 `entry-html-v5` 二选一脚本模式再次执行同一命令：
+
+- `lookup/ldoce_apple`: `1.0039 ms .. 1.0379 ms`
+- `lookup/ldoce_suggest_app`: `8.5969 µs .. 8.7486 µs`
+- `lookup/ldoce_entry_content_apple`: `6.9928 ms .. 7.0085 ms`
+
+说明：
+
+- 这次把“自有运行时”整块移除，改成词典级 `entry_script_mode = none | original`：`none` 完全不导入词典脚本，`original` 则原样保留词典脚本并配套放宽词条页 CSP
+- 短样本下三条基准都没有统计显著变化；至少从这轮 warm path 看，去掉自有 runtime 没有带来明显的热路径损失
+
+2026-04-04 为 `entry-html-v6` 原始脚本模式音频 URL 兼容修复再次执行同一命令：
+
+- `lookup/ldoce_apple`: `1.1671 ms .. 1.3154 ms`
+- `lookup/ldoce_suggest_app`: `9.0003 µs .. 9.2353 µs`
+- `lookup/ldoce_entry_content_apple`: `5.6977 ms .. 6.0934 ms`
+
+说明：
+
+- `entry_script_mode = "original"` 下，部分词典脚本会根据 `href` 文本内容自行拼接音频 URL；这次把本地音频资源链接改成对词典脚本透明的 opaque query 值，并把词条渲染版本提升到 `entry-html-v6`
+- 资源归一化只保留 `sound://...` 这类明确属于词典资源协议的输入，不再从任意 `http(s)` URL 反推本地资源 key；这样既保留词典原始脚本，又避免把 engine 逻辑做成词典站点兼容层。这轮短样本里 `lookup` 出现回归、`suggest` 无显著变化、`entry_content` 无显著变化，仍不把这轮结果当成稳定性能结论
+
+2026-04-04 为 `entry-html-v7` 内置音频 runtime 再次执行同一命令：
+
+- `lookup/ldoce_apple`: `996.16 µs .. 1.0068 ms`
+- `lookup/ldoce_suggest_app`: `8.5601 µs .. 8.8191 µs`
+- `lookup/ldoce_entry_content_apple`: `6.1655 ms .. 6.7431 ms`
+
+说明：
+
+- 这次不再依赖词典原始脚本自己正确阻止 `<a href=...>` 默认导航；后端把音频链接改写到 `data-audio-href`，并在 entry HTML 内按需注入极小 runtime 统一 `preventDefault + Audio(href).play()`，同时把渲染版本提升到 `entry-html-v7`
+- 短样本下 `lookup` 变化落在噪声阈值内、`suggest` 无显著变化、`entry_content` 改善；这类结果仍然受短 measurement window 影响较大，不能直接当成稳定结论
+
+2026-04-04 为同名 `.css` / `.js` sidecar 优先级修正再次执行同一命令：
+
+- `lookup/ldoce_apple`: `1.0148 ms .. 1.0289 ms`
+- `lookup/ldoce_suggest_app`: `8.8196 µs .. 8.9219 µs`
+- `lookup/ldoce_entry_content_apple`: `4.5890 ms .. 5.5407 ms`
+
+说明：
+
+- 这次把资源优先级从“`MDD` 优先、sidecar 仅兜底”调整为“同名 `.css` / `.js` sidecar 优先于 `MDD`”，用来兼容 LDOCE5++ 这类本地 companion 样式覆盖包内旧样式的场景
+- 短样本下 `lookup` 变化落在噪声阈值内、`suggest` 无显著变化、`entry_content` 出现改善；由于改动集中在资源访问层，这轮结果仍不应被过度解读为稳定的整体性能提升
 
 ## 实现约束
 

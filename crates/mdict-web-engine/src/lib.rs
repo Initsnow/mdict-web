@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
@@ -9,7 +9,7 @@ use blake3::Hasher;
 use bytes::Bytes;
 use lol_html::{RewriteStrSettings, element, rewrite_str};
 use mdict_rs::{Error as MdictError, Header, MddFile, MddResourceSpan, MdxFile, MdxRecord};
-use mdict_web_config::{AppConfig, DictionaryBundleManifest};
+use mdict_web_config::{AppConfig, DictionaryBundleManifest, EntryScriptMode};
 use mdict_web_domain::{
     DictionaryHeaderInfo, LookupMatchType, RenderedEntryContent, ResourceBody, ResourceContent,
     ServiceError, SuggestionItem, SuggestionMatchType,
@@ -27,52 +27,43 @@ use url::Url;
 
 const ENTRY_CACHE_CONTROL: &str = "public, max-age=60";
 const RESOURCE_CACHE_CONTROL: &str = "public, max-age=86400";
-const ENTRY_RENDER_VERSION: &str = "entry-html-v3";
+const ENTRY_RENDER_VERSION_NONE: &str = "entry-html-v7:none";
+const ENTRY_RENDER_VERSION_ORIGINAL: &str = "entry-html-v7:original";
 const RESOURCE_RENDER_VERSION: &str = "resource-v1";
 const ENTRY_LINK_PREFIX: &str = "@@@LINK=";
 const MAX_ENTRY_REDIRECT_DEPTH: usize = 8;
-const AUDIO_EXTENSIONS: &[&str] = &[".mp3", ".wav", ".ogg", ".oga", ".m4a", ".aac", ".flac"];
-const ENTRY_RUNTIME_SCRIPT: &str = r#"<script>
+const ENTRY_AUDIO_RUNTIME_SCRIPT: &str = r#"<script>
 (() => {
-  const init = () => {
-    const audio = new Audio();
-    audio.preload = "none";
-    document.addEventListener("click", (event) => {
-      const target = event.target;
-      const element =
-        target instanceof Element
-          ? target
-          : target instanceof Node
-            ? target.parentElement
-            : null;
-      if (!element) {
-        return;
-      }
-      const link = element.closest("a[data-audio-href]");
-      if (!(link instanceof HTMLAnchorElement)) {
-        return;
-      }
-      const href = link.getAttribute("data-audio-href");
-      if (!href) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      if (audio.src === href) {
-        audio.currentTime = 0;
-      } else {
-        audio.src = href;
-        audio.load();
-      }
-      void audio.play().catch(() => {});
-    });
-  };
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init, { once: true });
-  } else {
-    init();
-  }
+  const audio = new Audio();
+  audio.preload = "none";
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    const element =
+      target instanceof Element
+        ? target
+        : target instanceof Node
+          ? target.parentElement
+          : null;
+    if (!element) {
+      return;
+    }
+    const link = element.closest("a[data-audio-href]");
+    if (!(link instanceof HTMLAnchorElement)) {
+      return;
+    }
+    const href = link.getAttribute("data-audio-href");
+    if (!href) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (audio.src === href) {
+      audio.currentTime = 0;
+    } else {
+      audio.src = href;
+    }
+    void audio.play().catch(() => {});
+  }, true);
 })();
 </script>"#;
 
@@ -128,6 +119,12 @@ struct ResolvedMdxRecord {
     matched_key: String,
     redirected_from: Option<String>,
     record: MdxRecord,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedSidecarResource {
+    resolved_key: String,
+    path: PathBuf,
 }
 
 impl LoadedDictionary {
@@ -257,7 +254,7 @@ impl DictionaryEngine {
                 &dictionary_id,
                 &dictionary.version_tag,
                 &record.record.key,
-                ENTRY_RENDER_VERSION,
+                entry_render_version(dictionary.manifest.entry_script_mode),
             ),
             has_resources: dictionary.mdd.is_some(),
         })
@@ -280,16 +277,22 @@ impl DictionaryEngine {
             counter!("mdict_web_entry_cache_misses_total").increment(1);
         }
 
-        let html = rewrite_entry_html(&dictionary_id, &record.record.text)?;
+        let (html, allow_entry_runtime) = rewrite_entry_html(
+            &dictionary_id,
+            &record.record.text,
+            dictionary.manifest.entry_script_mode,
+        )?;
         let content = RenderedEntryContent {
             dictionary_id: dictionary_id.clone(),
             resolved_key: record.record.key.clone(),
             html,
+            allow_dictionary_scripts: dictionary.manifest.allows_dictionary_scripts(),
+            allow_entry_runtime,
             etag: entry_etag(
                 &dictionary_id,
                 &dictionary.version_tag,
                 &record.record.key,
-                ENTRY_RENDER_VERSION,
+                entry_render_version(dictionary.manifest.entry_script_mode),
             ),
             cache_control: ENTRY_CACHE_CONTROL.to_owned(),
         };
@@ -307,59 +310,159 @@ impl DictionaryEngine {
         query_key: String,
     ) -> Result<ResourceContent, ServiceError> {
         let dictionary_id = dictionary.manifest.dictionary_id.clone();
-        let Some(mdd) = dictionary.mdd.clone() else {
-            return Err(ServiceError::resource_not_found(&dictionary_id, &query_key));
-        };
+        if let Some(sidecar) = resolve_sidecar_resource(&dictionary.manifest.mdx_path, &query_key) {
+            return self
+                .serve_sidecar_resource(&dictionary.manifest.dictionary_id, sidecar)
+                .await;
+        }
 
-        let span = self
-            .lookup_resource_span(mdd.clone(), &dictionary_id, query_key)
-            .await?;
+        if let Some(mdd) = dictionary.mdd.clone() {
+            match self
+                .lookup_resource_span(mdd.clone(), &dictionary_id, query_key.clone())
+                .await
+            {
+                Ok(span) => {
+                    let cache_key = format!("{}:{}", dictionary.manifest.dictionary_id, span.key);
+                    if let Some(cache) = &self.resource_cache {
+                        if let Some(cached) = cache.get(&cache_key) {
+                            counter!("mdict_web_resource_cache_hits_total").increment(1);
+                            return Ok(cached.into_content(dictionary_id));
+                        }
+                        counter!("mdict_web_resource_cache_misses_total").increment(1);
+                    }
 
-        let cache_key = format!("{}:{}", dictionary.manifest.dictionary_id, span.key);
+                    let content_type = guess_content_type(&span.key);
+                    if should_materialize_resource(
+                        &content_type,
+                        span.len(),
+                        self.resource_cache_item_limit,
+                    ) {
+                        let payload = self
+                            .load_buffered_resource(
+                                mdd,
+                                &dictionary.manifest.dictionary_id,
+                                &dictionary.version_tag,
+                                span,
+                                content_type,
+                            )
+                            .await?;
+                        if let Some(cache) = &self.resource_cache {
+                            if let ResourceBody::Bytes(bytes) = &payload.body {
+                                cache.insert(
+                                    cache_key,
+                                    CachedResource {
+                                        resolved_key: payload.resolved_key.clone(),
+                                        content_type: payload.content_type.clone(),
+                                        bytes: bytes.clone(),
+                                        etag: payload.etag.clone(),
+                                        cache_control: payload.cache_control.clone(),
+                                    },
+                                );
+                            }
+                        }
+                        return Ok(payload);
+                    }
+
+                    return self
+                        .stream_resource(
+                            mdd,
+                            &dictionary.manifest.dictionary_id,
+                            &dictionary.version_tag,
+                            span,
+                            content_type,
+                        )
+                        .await;
+                }
+                Err(error) if error.code == mdict_web_domain::ErrorCode::ResourceNotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+
+        Err(ServiceError::resource_not_found(&dictionary_id, &query_key))
+    }
+
+    async fn serve_sidecar_resource(
+        &self,
+        dictionary_id: &str,
+        sidecar: ResolvedSidecarResource,
+    ) -> Result<ResourceContent, ServiceError> {
+        let cache_key = format!("{}:{}", dictionary_id, sidecar.resolved_key);
         if let Some(cache) = &self.resource_cache {
             if let Some(cached) = cache.get(&cache_key) {
                 counter!("mdict_web_resource_cache_hits_total").increment(1);
-                return Ok(cached.into_content(dictionary_id));
+                return Ok(cached.into_content(dictionary_id.to_owned()));
             }
             counter!("mdict_web_resource_cache_misses_total").increment(1);
         }
 
-        let content_type = guess_content_type(&span.key);
-        if should_materialize_resource(&content_type, span.len(), self.resource_cache_item_limit) {
-            let payload = self
-                .load_buffered_resource(
-                    mdd,
-                    &dictionary.manifest.dictionary_id,
-                    &dictionary.version_tag,
-                    span,
-                    content_type,
-                )
-                .await?;
-            if let Some(cache) = &self.resource_cache {
-                if let ResourceBody::Bytes(bytes) = &payload.body {
-                    cache.insert(
-                        cache_key,
-                        CachedResource {
-                            resolved_key: payload.resolved_key.clone(),
-                            content_type: payload.content_type.clone(),
-                            bytes: bytes.clone(),
-                            etag: payload.etag.clone(),
-                            cache_control: payload.cache_control.clone(),
-                        },
-                    );
-                }
+        let payload = self
+            .load_buffered_sidecar_resource(dictionary_id, sidecar)
+            .await?;
+        if let Some(cache) = &self.resource_cache {
+            if let ResourceBody::Bytes(bytes) = &payload.body {
+                cache.insert(
+                    cache_key,
+                    CachedResource {
+                        resolved_key: payload.resolved_key.clone(),
+                        content_type: payload.content_type.clone(),
+                        bytes: bytes.clone(),
+                        etag: payload.etag.clone(),
+                        cache_control: payload.cache_control.clone(),
+                    },
+                );
             }
-            return Ok(payload);
         }
+        Ok(payload)
+    }
 
-        self.stream_resource(
-            mdd,
-            &dictionary.manifest.dictionary_id,
-            &dictionary.version_tag,
-            span,
-            content_type,
-        )
-        .await
+    async fn load_buffered_sidecar_resource(
+        &self,
+        dictionary_id: &str,
+        sidecar: ResolvedSidecarResource,
+    ) -> Result<ResourceContent, ServiceError> {
+        let dictionary_id = dictionary_id.to_owned();
+        let resolved_key = sidecar.resolved_key.clone();
+        let path_for_read = sidecar.path.clone();
+        let dictionary_id_for_read = dictionary_id.clone();
+        let raw_bytes = self
+            .run_blocking("sidecar_read", move || {
+                fs::read(&path_for_read).map_err(|error| {
+                    ServiceError::dictionary_unavailable(&dictionary_id_for_read, error.to_string())
+                })
+            })
+            .await?;
+        let metadata = fs::metadata(&sidecar.path).map_err(|error| {
+            ServiceError::dictionary_unavailable(&dictionary_id, error.to_string())
+        })?;
+        let modified = metadata
+            .modified()
+            .unwrap_or(UNIX_EPOCH)
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let version_tag = format!("sidecar:{}:{modified}", metadata.len());
+        let content_type = guess_content_type(&resolved_key);
+        let bytes = if content_type.essence_str() == "text/css" {
+            let css = String::from_utf8_lossy(&raw_bytes);
+            Bytes::from(rewrite_css_urls(&dictionary_id, &css))
+        } else {
+            Bytes::from(raw_bytes)
+        };
+
+        Ok(ResourceContent {
+            dictionary_id: dictionary_id.clone(),
+            resolved_key: resolved_key.clone(),
+            content_type: content_type.to_string(),
+            body: ResourceBody::Bytes(bytes.clone()),
+            content_length: Some(bytes.len() as u64),
+            etag: resource_etag(
+                &dictionary_id,
+                &version_tag,
+                &resolved_key,
+                RESOURCE_RENDER_VERSION,
+            ),
+            cache_control: RESOURCE_CACHE_CONTROL.to_owned(),
+        })
     }
 
     async fn lookup_record(
@@ -570,6 +673,13 @@ fn dictionary_version_tag(
     Ok(version)
 }
 
+fn entry_render_version(entry_script_mode: EntryScriptMode) -> &'static str {
+    match entry_script_mode {
+        EntryScriptMode::None => ENTRY_RENDER_VERSION_NONE,
+        EntryScriptMode::Original => ENTRY_RENDER_VERSION_ORIGINAL,
+    }
+}
+
 fn entry_etag(dictionary_id: &str, version_tag: &str, key: &str, render_version: &str) -> String {
     strong_etag(&format!(
         "entry:{dictionary_id}:{version_tag}:{key}:{render_version}"
@@ -607,7 +717,12 @@ impl CachedResource {
     }
 }
 
-fn rewrite_entry_html(dictionary_id: &str, html: &str) -> Result<String, ServiceError> {
+fn rewrite_entry_html(
+    dictionary_id: &str,
+    html: &str,
+    entry_script_mode: EntryScriptMode,
+) -> Result<(String, bool), ServiceError> {
+    let allow_dictionary_scripts = matches!(entry_script_mode, EntryScriptMode::Original);
     let style_blocks_rewritten = rewrite_style_blocks(dictionary_id, html)?;
 
     let sanitized = rewrite_str(
@@ -615,7 +730,9 @@ fn rewrite_entry_html(dictionary_id: &str, html: &str) -> Result<String, Service
         RewriteStrSettings {
             element_content_handlers: vec![
                 element!("script", |element| {
-                    element.remove();
+                    if !allow_dictionary_scripts {
+                        element.remove();
+                    }
                     Ok(())
                 }),
                 element!("iframe", |element| {
@@ -643,13 +760,28 @@ fn rewrite_entry_html(dictionary_id: &str, html: &str) -> Result<String, Service
                     Ok(())
                 }),
                 element!("*[src]", |element| {
-                    Ok(rewrite_attr(dictionary_id, element, "src")?)
+                    Ok(rewrite_attr(
+                        dictionary_id,
+                        element,
+                        "src",
+                        entry_script_mode,
+                    )?)
                 }),
                 element!("*[href]", |element| {
-                    Ok(rewrite_attr(dictionary_id, element, "href")?)
+                    Ok(rewrite_attr(
+                        dictionary_id,
+                        element,
+                        "href",
+                        entry_script_mode,
+                    )?)
                 }),
                 element!("*[poster]", |element| {
-                    Ok(rewrite_attr(dictionary_id, element, "poster")?)
+                    Ok(rewrite_attr(
+                        dictionary_id,
+                        element,
+                        "poster",
+                        entry_script_mode,
+                    )?)
                 }),
                 element!("*[style]", |element| {
                     if let Some(style) = element.get_attribute("style") {
@@ -662,7 +794,7 @@ fn rewrite_entry_html(dictionary_id: &str, html: &str) -> Result<String, Service
                 }),
                 element!("*[srcset]", |element| {
                     if let Some(srcset) = element.get_attribute("srcset") {
-                        let rewritten = rewrite_srcset(dictionary_id, &srcset);
+                        let rewritten = rewrite_srcset(dictionary_id, &srcset, entry_script_mode);
                         element
                             .set_attribute("srcset", &rewritten)
                             .map_err(box_error)?;
@@ -675,8 +807,12 @@ fn rewrite_entry_html(dictionary_id: &str, html: &str) -> Result<String, Service
     )
     .map_err(|error| ServiceError::internal(format!("failed to rewrite entry HTML: {error}")))?;
 
-    let without_event_handlers = strip_event_handlers(&sanitized)?;
-    Ok(wrap_html_document(&without_event_handlers))
+    if allow_dictionary_scripts {
+        wrap_html_document(&sanitized)
+    } else {
+        let without_event_handlers = strip_event_handlers(&sanitized)?;
+        wrap_html_document(&without_event_handlers)
+    }
 }
 
 fn rewrite_style_blocks(dictionary_id: &str, html: &str) -> Result<String, ServiceError> {
@@ -706,7 +842,7 @@ fn strip_event_handlers(html: &str) -> Result<String, ServiceError> {
     Ok(pattern.replace_all(html, "").into_owned())
 }
 
-fn wrap_html_document(html: &str) -> String {
+fn wrap_html_document(html: &str) -> Result<(String, bool), ServiceError> {
     let lower = html.to_ascii_lowercase();
     let document = if lower.contains("<html") {
         html.to_owned()
@@ -715,36 +851,37 @@ fn wrap_html_document(html: &str) -> String {
             "<!doctype html><html><head><meta charset=\"utf-8\"></head><body>{html}</body></html>"
         )
     };
-    if document.contains("data-audio-href=") {
-        inject_entry_runtime(&document)
+    let allow_entry_runtime = document.contains("data-audio-href=");
+    if allow_entry_runtime {
+        Ok((inject_entry_runtime(&document), true))
     } else {
-        document
+        Ok((document, false))
     }
 }
 
 fn inject_entry_runtime(html: &str) -> String {
     let lower = html.to_ascii_lowercase();
     if let Some(index) = lower.rfind("</body>") {
-        let mut out = String::with_capacity(html.len() + ENTRY_RUNTIME_SCRIPT.len());
+        let mut out = String::with_capacity(html.len() + ENTRY_AUDIO_RUNTIME_SCRIPT.len());
         out.push_str(&html[..index]);
-        out.push_str(ENTRY_RUNTIME_SCRIPT);
+        out.push_str(ENTRY_AUDIO_RUNTIME_SCRIPT);
         out.push_str(&html[index..]);
         return out;
     }
     if let Some(index) = lower.rfind("</html>") {
-        let mut out = String::with_capacity(html.len() + ENTRY_RUNTIME_SCRIPT.len());
+        let mut out = String::with_capacity(html.len() + ENTRY_AUDIO_RUNTIME_SCRIPT.len());
         out.push_str(&html[..index]);
-        out.push_str(ENTRY_RUNTIME_SCRIPT);
+        out.push_str(ENTRY_AUDIO_RUNTIME_SCRIPT);
         out.push_str(&html[index..]);
         return out;
     }
-    let mut out = String::with_capacity(html.len() + ENTRY_RUNTIME_SCRIPT.len());
+    let mut out = String::with_capacity(html.len() + ENTRY_AUDIO_RUNTIME_SCRIPT.len());
     out.push_str(html);
-    out.push_str(ENTRY_RUNTIME_SCRIPT);
+    out.push_str(ENTRY_AUDIO_RUNTIME_SCRIPT);
     out
 }
 
-fn rewrite_srcset(dictionary_id: &str, srcset: &str) -> String {
+fn rewrite_srcset(dictionary_id: &str, srcset: &str, entry_script_mode: EntryScriptMode) -> String {
     srcset
         .split(',')
         .filter_map(|item| {
@@ -755,7 +892,7 @@ fn rewrite_srcset(dictionary_id: &str, srcset: &str) -> String {
             let mut parts = trimmed.split_whitespace();
             let url = parts.next()?;
             let descriptor = parts.collect::<Vec<_>>().join(" ");
-            let rewritten = rewrite_url_value(dictionary_id, "srcset", url)?;
+            let rewritten = rewrite_url_value(dictionary_id, "srcset", url, entry_script_mode)?;
             if descriptor.is_empty() {
                 Some(rewritten)
             } else {
@@ -770,15 +907,17 @@ fn rewrite_attr(
     dictionary_id: &str,
     element: &mut lol_html::html_content::Element<'_, '_>,
     attribute: &str,
+    entry_script_mode: EntryScriptMode,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let Some(value) = element.get_attribute(attribute) {
-        match rewrite_url_value(dictionary_id, attribute, &value) {
+        let mark_audio = attribute == "href" && resource_looks_like_audio(&value);
+        match rewrite_url_value(dictionary_id, attribute, &value, entry_script_mode) {
             Some(rewritten) => {
-                if attribute == "href" && is_audio_href(&value, &rewritten) {
+                if mark_audio {
                     element
                         .set_attribute("data-audio-href", &rewritten)
                         .map_err(box_error)?;
-                    element.remove_attribute("href");
+                    element.remove_attribute(attribute);
                 } else {
                     element
                         .set_attribute(attribute, &rewritten)
@@ -798,7 +937,12 @@ where
     Box::new(error)
 }
 
-fn rewrite_url_value(dictionary_id: &str, attribute: &str, raw: &str) -> Option<String> {
+fn rewrite_url_value(
+    dictionary_id: &str,
+    attribute: &str,
+    raw: &str,
+    entry_script_mode: EntryScriptMode,
+) -> Option<String> {
     let value = raw.trim();
     if value.is_empty() {
         return None;
@@ -810,6 +954,20 @@ fn rewrite_url_value(dictionary_id: &str, attribute: &str, raw: &str) -> Option<
 
     if attribute == "href" && value.starts_with("entry://") {
         return entry_content_href(dictionary_id, value);
+    }
+
+    if attribute == "href" && resource_looks_like_audio(value) {
+        return Some(match entry_script_mode {
+            EntryScriptMode::None => resource_content_url(dictionary_id, value),
+            EntryScriptMode::Original => resource_content_url_opaque(dictionary_id, value),
+        });
+    }
+
+    if attribute == "href"
+        && matches!(entry_script_mode, EntryScriptMode::Original)
+        && value.to_ascii_lowercase().starts_with("javascript:")
+    {
+        return Some(value.to_owned());
     }
 
     if is_dangerous_scheme(value) {
@@ -837,7 +995,7 @@ fn rewrite_css_urls(dictionary_id: &str, css: &str) -> String {
                 .name("url")
                 .map(|match_| match_.as_str())
                 .unwrap_or("");
-            match rewrite_url_value(dictionary_id, "style", raw_url) {
+            match rewrite_url_value(dictionary_id, "style", raw_url, EntryScriptMode::None) {
                 Some(rewritten) => format!("url(\"{rewritten}\")"),
                 None => "url(\"\")".to_owned(),
             }
@@ -869,6 +1027,23 @@ fn resource_content_url(dictionary_id: &str, resource_key: &str) -> String {
     )
 }
 
+fn resource_content_url_opaque(dictionary_id: &str, resource_key: &str) -> String {
+    format!(
+        "/api/v1/dictionaries/{dictionary_id}/resources/content?key={}",
+        opaque_percent_encode(resource_key)
+    )
+}
+
+fn opaque_percent_encode(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() * 3);
+    for byte in raw.as_bytes() {
+        out.push('%');
+        out.push(char::from(b"0123456789ABCDEF"[(byte >> 4) as usize]));
+        out.push(char::from(b"0123456789ABCDEF"[(byte & 0x0F) as usize]));
+    }
+    out
+}
+
 fn entry_content_href(dictionary_id: &str, raw: &str) -> Option<String> {
     let target = raw.strip_prefix("entry://")?;
     let (entry_key_raw, fragment) = match target.split_once('#') {
@@ -890,46 +1065,13 @@ fn entry_content_href(dictionary_id: &str, raw: &str) -> Option<String> {
     Some(href)
 }
 
-fn is_audio_href(raw: &str, rewritten: &str) -> bool {
-    resource_looks_like_audio(raw) || resource_looks_like_audio(rewritten)
-}
-
-fn resource_looks_like_audio(value: &str) -> bool {
-    let trimmed = value.trim();
-    if trimmed.starts_with("sound://") || has_audio_extension(trimmed) {
-        return true;
-    }
-
-    parse_url_like(trimmed).is_some_and(|url| {
-        has_audio_extension(url.path())
-            || url.query_pairs().any(|(key, value)| {
-                key == "key"
-                    && (value.starts_with("sound://") || has_audio_extension(value.as_ref()))
-            })
-    })
-}
-
-fn has_audio_extension(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    AUDIO_EXTENSIONS
-        .iter()
-        .any(|extension| lower.ends_with(extension))
-}
-
-fn parse_url_like(raw: &str) -> Option<Url> {
-    Url::parse(raw).ok().or_else(|| {
-        let base = Url::parse("http://localhost/").ok()?;
-        base.join(raw).ok()
-    })
-}
-
 fn resource_key_candidates(raw: &str) -> Vec<String> {
     let trimmed = raw.trim_matches(char::is_whitespace).trim_matches('\0');
     let mut seen = HashSet::new();
     let mut out = Vec::new();
 
     let mut bases = vec![trimmed.to_owned()];
-    if let Some(normalized) = special_resource_lookup_base(trimmed) {
+    if let Some(normalized) = resource_lookup_base_from_sound_url(trimmed) {
         bases.push(normalized);
     }
 
@@ -962,7 +1104,54 @@ fn resource_key_candidates(raw: &str) -> Vec<String> {
     out
 }
 
-fn special_resource_lookup_base(raw: &str) -> Option<String> {
+fn resolve_sidecar_resource(mdx_path: &Path, raw: &str) -> Option<ResolvedSidecarResource> {
+    let root = mdx_path.parent()?;
+    let candidates = resource_key_candidates(raw);
+    for candidate in candidates {
+        let normalized = normalize_sidecar_candidate(&candidate)?;
+        let path = root.join(&normalized);
+        if path.is_file() {
+            return Some(ResolvedSidecarResource {
+                resolved_key: normalized,
+                path,
+            });
+        }
+    }
+    None
+}
+
+fn normalize_sidecar_candidate(candidate: &str) -> Option<String> {
+    let trimmed = candidate.trim_start_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let normalized = trimmed.replace('\\', "/");
+    let path = Path::new(&normalized);
+    let mut safe = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => safe.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    if safe.as_os_str().is_empty() {
+        return None;
+    }
+
+    let extension = safe
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())?;
+    if !matches!(extension.as_str(), "css" | "js") {
+        return None;
+    }
+
+    Some(safe.to_string_lossy().replace('\\', "/"))
+}
+
+fn resource_lookup_base_from_sound_url(raw: &str) -> Option<String> {
     let url = Url::parse(raw).ok()?;
     if url.scheme() != "sound" {
         return None;
@@ -974,6 +1163,35 @@ fn special_resource_lookup_base(raw: &str) -> Option<String> {
         host.to_owned()
     } else {
         format!("{host}/{path}")
+    })
+}
+
+fn resource_looks_like_audio(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.starts_with("sound://") || has_audio_extension(trimmed) {
+        return true;
+    }
+
+    parse_url_like(trimmed).is_some_and(|url| {
+        has_audio_extension(url.path())
+            || url.query_pairs().any(|(key, value)| {
+                key == "key"
+                    && (value.starts_with("sound://") || has_audio_extension(value.as_ref()))
+            })
+    })
+}
+
+fn has_audio_extension(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    [".mp3", ".wav", ".ogg", ".oga", ".m4a", ".aac", ".flac"]
+        .iter()
+        .any(|extension| lower.ends_with(extension))
+}
+
+fn parse_url_like(raw: &str) -> Option<Url> {
+    Url::parse(raw).ok().or_else(|| {
+        let base = Url::parse("http://localhost/").ok()?;
+        base.join(raw).ok()
     })
 }
 
@@ -1048,6 +1266,8 @@ fn entry_link_target(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use tempfile::tempdir;
+
     use super::*;
 
     #[test]
@@ -1076,10 +1296,32 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_entry_html_marks_audio_links_for_inline_playback() {
-        let rewritten = rewrite_entry_html(
+    fn resolve_sidecar_resource_uses_mdx_sibling_css_js_only() {
+        let dir = tempdir().expect("temp dir should exist");
+        let mdx_path = dir.path().join("demo.mdx");
+        fs::write(&mdx_path, b"mdx").expect("mdx placeholder should write");
+        fs::write(dir.path().join("lm6.css"), b"body{}").expect("css should write");
+        fs::write(dir.path().join("lm6.js"), b"console.log(1);").expect("js should write");
+        fs::write(dir.path().join("image.png"), b"png").expect("png should write");
+
+        let css =
+            resolve_sidecar_resource(&mdx_path, "lm6.css").expect("css sidecar should resolve");
+        assert_eq!(css.resolved_key, "lm6.css");
+
+        let js =
+            resolve_sidecar_resource(&mdx_path, "\\lm6.js").expect("js sidecar should resolve");
+        assert_eq!(js.resolved_key, "lm6.js");
+
+        assert!(resolve_sidecar_resource(&mdx_path, "image.png").is_none());
+        assert!(resolve_sidecar_resource(&mdx_path, "../lm6.css").is_none());
+    }
+
+    #[test]
+    fn rewrite_entry_html_rewrites_audio_links_without_runtime() {
+        let (rewritten, allow_entry_runtime) = rewrite_entry_html(
             "demo",
             r#"<a class="speaker" href="sound://media/english/ameProns/apple1.mp3"> </a>"#,
+            EntryScriptMode::None,
         )
         .expect("entry html should rewrite");
         assert!(
@@ -1088,27 +1330,81 @@ mod tests {
             ),
             "{rewritten}"
         );
+        assert!(allow_entry_runtime);
+        assert!(
+            rewritten.contains(ENTRY_AUDIO_RUNTIME_SCRIPT),
+            "{rewritten}"
+        );
         assert!(
             !rewritten.contains(
                 r#"class="speaker" href="/api/v1/dictionaries/demo/resources/content?key=sound%3A%2F%2Fmedia%2Fenglish%2FameProns%2Fapple1%2Emp3""#
             ),
             "{rewritten}"
         );
-        assert!(rewritten.contains(ENTRY_RUNTIME_SCRIPT), "{rewritten}");
     }
 
     #[test]
-    fn rewrite_entry_html_skips_runtime_for_plain_text_entries() {
-        let rewritten =
-            rewrite_entry_html("demo", "<p>plain text</p>").expect("entry html should rewrite");
-        assert!(!rewritten.contains(ENTRY_RUNTIME_SCRIPT), "{rewritten}");
+    fn rewrite_entry_html_strips_dictionary_scripts_in_none_mode() {
+        let (rewritten, allow_entry_runtime) = rewrite_entry_html(
+            "demo",
+            r#"<a onclick="play()">play</a><script>play()</script>"#,
+            EntryScriptMode::None,
+        )
+        .expect("entry html should rewrite");
+        assert!(!rewritten.contains("<script>"), "{rewritten}");
+        assert!(!rewritten.contains("onclick="), "{rewritten}");
+        assert!(!allow_entry_runtime);
+    }
+
+    #[test]
+    fn rewrite_entry_html_preserves_dictionary_scripts_in_original_mode() {
+        let (rewritten, allow_entry_runtime) = rewrite_entry_html(
+            "demo",
+            r#"<a href="javascript:play()" onclick="play()">play</a><script src="js/app.js"></script>"#,
+            EntryScriptMode::Original,
+        )
+        .expect("entry html should rewrite");
+        assert!(
+            rewritten.contains(r#"href="javascript:play()""#),
+            "{rewritten}"
+        );
+        assert!(rewritten.contains(r#"onclick="play()""#), "{rewritten}");
+        assert!(
+            rewritten
+                .contains(r#"src="/api/v1/dictionaries/demo/resources/content?key=js%2Fapp%2Ejs""#),
+            "{rewritten}"
+        );
+        assert!(!allow_entry_runtime);
+    }
+
+    #[test]
+    fn rewrite_entry_html_uses_opaque_audio_urls_in_original_mode() {
+        let (rewritten, allow_entry_runtime) = rewrite_entry_html(
+            "demo",
+            r#"<a class="speaker" href="sound://media/english/ameProns/rust1.mp3">play</a>"#,
+            EntryScriptMode::Original,
+        )
+        .expect("entry html should rewrite");
+        assert!(
+            rewritten.contains(
+                r#"data-audio-href="/api/v1/dictionaries/demo/resources/content?key=%73%6F%75%6E%64%3A%2F%2F%6D%65%64%69%61"#
+            ),
+            "{rewritten}"
+        );
+        assert!(allow_entry_runtime);
+        assert!(
+            rewritten.contains(ENTRY_AUDIO_RUNTIME_SCRIPT),
+            "{rewritten}"
+        );
+        assert!(!rewritten.contains("?key=sound%3A"), "{rewritten}");
     }
 
     #[test]
     fn rewrite_entry_html_maps_entry_links_to_entry_content() {
-        let rewritten = rewrite_entry_html(
+        let (rewritten, allow_entry_runtime) = rewrite_entry_html(
             "demo",
             r#"<a class="crossRef" href="entry://building%20block#building-block__1__a">building block</a>"#,
+            EntryScriptMode::None,
         )
         .expect("entry html should rewrite");
         assert!(
@@ -1123,6 +1419,7 @@ mod tests {
             ),
             "{rewritten}"
         );
+        assert!(!allow_entry_runtime);
     }
 
     #[test]

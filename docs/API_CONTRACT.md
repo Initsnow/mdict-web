@@ -383,14 +383,17 @@
 响应体：
 
 - 已重写的词条 HTML；若 `key` 命中的是 `@@@LINK=` alias，则直接返回最终目标词条的 HTML
-- 词典自带脚本会被移除；只有当词条里出现 `data-audio-href` 音频链接时，后端才会注入自有的极小运行时在 iframe 内处理它
-- 词条中的音频资源链接会重写为非导航属性 `data-audio-href`，由该运行时在 iframe 内原位播放，避免 iframe 自身跳到媒体 URL
+- 行为取决于词典 manifest 的 `entry_script_mode = none | original`；默认是 `none`
+- `entry_script_mode = none` 时，后端会移除词典自带 `<script>`、内联事件处理器和 `javascript:` 链接，只保留重写后的 HTML/CSS/资源 URL
+- `entry_script_mode = original` 时，后端会保留词典原始 `<script>`、内联事件处理器和 `javascript:` 链接，但仍通过受控资源 API 重写相对资源路径
+- 词条中的音频资源链接会把真实播放地址改写到非导航属性 `data-audio-href`；后端会在返回的 entry HTML 内按需注入极小 runtime，统一拦截点击后原位播放，避免浏览器直接导航到媒体响应
 - 词条中的 `entry://{target}` 链接会重写为同词典的 `entries/content?key={target}`，若原链接带 `#fragment` 则一并保留
 
 前端约定：
 
 - 默认用 sandboxed iframe 渲染
-- iframe 需要允许自有运行时脚本执行；不要执行词典原始脚本
+- iframe 需要允许脚本执行，因为部分词典可显式启用 `entry_script_mode = original`
+- iframe 需要允许后端注入的最小音频 runtime 执行
 - 不直接把返回内容插进主应用 DOM
 
 条件请求：
@@ -407,6 +410,7 @@
 - `resource_key` 是 MDD 中的原始资源 key
 - 必须通过 query 参数传递，不使用路径拼接，避免反斜杠和转义问题
 - 后端也会兼容词条 HTML 中出现的 `sound://...` 音频资源引用，并在服务端归一化到实际的 MDD key 变体
+- 若 `resource_key` 对应的 MDX 同目录下存在同名 `.css` / `.js` sidecar 文件，则本地 sidecar 优先于 MDD；其他后缀仍保持 MDD 优先，且当前不扩展到更多 sidecar 类型
 
 成功响应：
 

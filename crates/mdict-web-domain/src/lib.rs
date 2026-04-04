@@ -274,6 +274,8 @@ pub struct RenderedEntryContent {
     pub dictionary_id: String,
     pub resolved_key: String,
     pub html: String,
+    pub allow_dictionary_scripts: bool,
+    pub allow_entry_runtime: bool,
     pub etag: String,
     pub cache_control: String,
 }
