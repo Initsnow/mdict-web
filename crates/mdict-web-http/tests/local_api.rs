@@ -233,7 +233,7 @@ async fn local_fixture_http_smoke_test() {
             .get("content-security-policy")
             .and_then(|value| value.to_str().ok()),
         Some(
-            "default-src 'none'; img-src 'self' data: blob:; media-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; connect-src 'none'"
+            "default-src 'none'; script-src 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; connect-src 'none'"
         )
     );
     let content_etag = content
@@ -250,7 +250,22 @@ async fn local_fixture_http_smoke_test() {
         content_text.contains("/api/v1/dictionaries/ldoce5pp/resources/content?key="),
         "{content_text}"
     );
-    assert!(!content_text.to_ascii_lowercase().contains("<script"));
+    assert!(content_text.contains("data-audio-href="), "{content_text}");
+    assert!(content_text.contains("<script>"), "{content_text}");
+    assert!(
+        content_text.contains("class=\"speaker brefile fa fa-volume-up\""),
+        "{content_text}"
+    );
+    assert!(
+        content_text.contains(
+            "data-audio-href=\"/api/v1/dictionaries/ldoce5pp/resources/content?key=sound%3A"
+        ),
+        "{content_text}"
+    );
+    assert!(
+        content_text.contains("const audio = new Audio()"),
+        "{content_text}"
+    );
 
     let redirect_content = app
         .clone()
@@ -303,7 +318,7 @@ async fn local_fixture_http_smoke_test() {
             .get("content-security-policy")
             .and_then(|value| value.to_str().ok()),
         Some(
-            "default-src 'none'; img-src 'self' data: blob:; media-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; connect-src 'none'"
+            "default-src 'none'; script-src 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; connect-src 'none'"
         )
     );
 

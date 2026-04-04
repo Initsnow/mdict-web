@@ -21,7 +21,7 @@
   - exact lookup / suggest / entry content / resource content
   - MDX `@@@LINK=` alias 解析与最终词条跳转
   - `sound://...` 音频资源 key 到实际 MDD 路径的服务端归一化
-  - 前端 iframe 词条查看器会拦截音频资源链接并在原位播放，不再导航到默认浏览器播放器
+  - 词条 HTML 中的音频链接会被后端重写为 `data-audio-href`；仅在词条真的包含音频链接时才注入自有 iframe 运行时，在词条页内部原位播放，不再导航到默认浏览器播放器
   - HTML/CSS 重写与内容安全头
   - sidecar suggest 索引
   - admin reload / healthz / readyz / metrics
@@ -96,6 +96,17 @@
 
 - 这次仍是短样本测量，同日多次重复的波动已经足够大，暂不把单次 change 判定直接视为稳定回归或稳定提升
 - 如果后续要对 alias resolve 的性能影响做结论，需要增大 sample size / measurement time 后再看
+
+2026-04-04 为音频链接重写与 `entry-html-v3` 再次执行同一命令：
+
+- `lookup/ldoce_apple`: `985.41 µs .. 1.0067 ms`
+- `lookup/ldoce_suggest_app`: `8.8690 µs .. 8.9863 µs`
+- `lookup/ldoce_entry_content_apple`: `7.5056 ms .. 7.6596 ms`
+
+说明：
+
+- 这次修复把词条 HTML 中的音频链接从可导航 `href` 改写为 `data-audio-href`，并仅在需要时在词条页里注入自有音频运行时；同时提升了 `ENTRY_RENDER_VERSION`，避免浏览器继续复用旧缓存正文
+- `entry_content` 短样本下出现了更明显的统计显著回归；如果要判断这次运行时注入与额外 HTML 重写逻辑的真实成本，需要放大样本后再看
 
 ## 实现约束
 

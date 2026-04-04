@@ -27,10 +27,54 @@ use url::Url;
 
 const ENTRY_CACHE_CONTROL: &str = "public, max-age=60";
 const RESOURCE_CACHE_CONTROL: &str = "public, max-age=86400";
-const ENTRY_RENDER_VERSION: &str = "entry-html-v1";
+const ENTRY_RENDER_VERSION: &str = "entry-html-v3";
 const RESOURCE_RENDER_VERSION: &str = "resource-v1";
 const ENTRY_LINK_PREFIX: &str = "@@@LINK=";
 const MAX_ENTRY_REDIRECT_DEPTH: usize = 8;
+const AUDIO_EXTENSIONS: &[&str] = &[".mp3", ".wav", ".ogg", ".oga", ".m4a", ".aac", ".flac"];
+const ENTRY_RUNTIME_SCRIPT: &str = r#"<script>
+(() => {
+  const init = () => {
+    const audio = new Audio();
+    audio.preload = "none";
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      const element =
+        target instanceof Element
+          ? target
+          : target instanceof Node
+            ? target.parentElement
+            : null;
+      if (!element) {
+        return;
+      }
+      const link = element.closest("a[data-audio-href]");
+      if (!(link instanceof HTMLAnchorElement)) {
+        return;
+      }
+      const href = link.getAttribute("data-audio-href");
+      if (!href) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (audio.src === href) {
+        audio.currentTime = 0;
+      } else {
+        audio.src = href;
+        audio.load();
+      }
+      void audio.play().catch(() => {});
+    });
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init, { once: true });
+  } else {
+    init();
+  }
+})();
+</script>"#;
 
 #[derive(Debug)]
 pub struct LoadedDictionary {
@@ -664,11 +708,40 @@ fn strip_event_handlers(html: &str) -> Result<String, ServiceError> {
 
 fn wrap_html_document(html: &str) -> String {
     let lower = html.to_ascii_lowercase();
-    if lower.contains("<html") {
-        return html.to_owned();
+    let document = if lower.contains("<html") {
+        html.to_owned()
+    } else {
+        format!(
+            "<!doctype html><html><head><meta charset=\"utf-8\"></head><body>{html}</body></html>"
+        )
+    };
+    if document.contains("data-audio-href=") {
+        inject_entry_runtime(&document)
+    } else {
+        document
     }
+}
 
-    format!("<!doctype html><html><head><meta charset=\"utf-8\"></head><body>{html}</body></html>")
+fn inject_entry_runtime(html: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    if let Some(index) = lower.rfind("</body>") {
+        let mut out = String::with_capacity(html.len() + ENTRY_RUNTIME_SCRIPT.len());
+        out.push_str(&html[..index]);
+        out.push_str(ENTRY_RUNTIME_SCRIPT);
+        out.push_str(&html[index..]);
+        return out;
+    }
+    if let Some(index) = lower.rfind("</html>") {
+        let mut out = String::with_capacity(html.len() + ENTRY_RUNTIME_SCRIPT.len());
+        out.push_str(&html[..index]);
+        out.push_str(ENTRY_RUNTIME_SCRIPT);
+        out.push_str(&html[index..]);
+        return out;
+    }
+    let mut out = String::with_capacity(html.len() + ENTRY_RUNTIME_SCRIPT.len());
+    out.push_str(html);
+    out.push_str(ENTRY_RUNTIME_SCRIPT);
+    out
 }
 
 fn rewrite_srcset(dictionary_id: &str, srcset: &str) -> String {
@@ -700,9 +773,18 @@ fn rewrite_attr(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let Some(value) = element.get_attribute(attribute) {
         match rewrite_url_value(dictionary_id, attribute, &value) {
-            Some(rewritten) => element
-                .set_attribute(attribute, &rewritten)
-                .map_err(box_error)?,
+            Some(rewritten) => {
+                if attribute == "href" && is_audio_href(&value, &rewritten) {
+                    element
+                        .set_attribute("data-audio-href", &rewritten)
+                        .map_err(box_error)?;
+                    element.remove_attribute("href");
+                } else {
+                    element
+                        .set_attribute(attribute, &rewritten)
+                        .map_err(box_error)?;
+                }
+            }
             None => element.remove_attribute(attribute),
         }
     }
@@ -781,6 +863,39 @@ fn resource_content_url(dictionary_id: &str, resource_key: &str) -> String {
         "/api/v1/dictionaries/{dictionary_id}/resources/content?key={}",
         utf8_percent_encode(resource_key, NON_ALPHANUMERIC)
     )
+}
+
+fn is_audio_href(raw: &str, rewritten: &str) -> bool {
+    resource_looks_like_audio(raw) || resource_looks_like_audio(rewritten)
+}
+
+fn resource_looks_like_audio(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.starts_with("sound://") || has_audio_extension(trimmed) {
+        return true;
+    }
+
+    parse_url_like(trimmed).is_some_and(|url| {
+        has_audio_extension(url.path())
+            || url.query_pairs().any(|(key, value)| {
+                key == "key"
+                    && (value.starts_with("sound://") || has_audio_extension(value.as_ref()))
+            })
+    })
+}
+
+fn has_audio_extension(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    AUDIO_EXTENSIONS
+        .iter()
+        .any(|extension| lower.ends_with(extension))
+}
+
+fn parse_url_like(raw: &str) -> Option<Url> {
+    Url::parse(raw).ok().or_else(|| {
+        let base = Url::parse("http://localhost/").ok()?;
+        base.join(raw).ok()
+    })
 }
 
 fn resource_key_candidates(raw: &str) -> Vec<String> {
@@ -933,6 +1048,35 @@ mod tests {
         let variants = resource_key_candidates("sound://media/english/ameProns/laadbuild-up.mp3");
         assert!(variants.contains(&"media/english/ameProns/laadbuild-up.mp3".to_owned()));
         assert!(variants.contains(&"\\media\\english\\ameProns\\laadbuild-up.mp3".to_owned()));
+    }
+
+    #[test]
+    fn rewrite_entry_html_marks_audio_links_for_inline_playback() {
+        let rewritten = rewrite_entry_html(
+            "demo",
+            r#"<a class="speaker" href="sound://media/english/ameProns/apple1.mp3"> </a>"#,
+        )
+        .expect("entry html should rewrite");
+        assert!(
+            rewritten.contains(
+                r#"class="speaker" data-audio-href="/api/v1/dictionaries/demo/resources/content?key=sound%3A%2F%2Fmedia%2Fenglish%2FameProns%2Fapple1%2Emp3""#
+            ),
+            "{rewritten}"
+        );
+        assert!(
+            !rewritten.contains(
+                r#"class="speaker" href="/api/v1/dictionaries/demo/resources/content?key=sound%3A%2F%2Fmedia%2Fenglish%2FameProns%2Fapple1%2Emp3""#
+            ),
+            "{rewritten}"
+        );
+        assert!(rewritten.contains(ENTRY_RUNTIME_SCRIPT), "{rewritten}");
+    }
+
+    #[test]
+    fn rewrite_entry_html_skips_runtime_for_plain_text_entries() {
+        let rewritten =
+            rewrite_entry_html("demo", "<p>plain text</p>").expect("entry html should rewrite");
+        assert!(!rewritten.contains(ENTRY_RUNTIME_SCRIPT), "{rewritten}");
     }
 
     #[test]
