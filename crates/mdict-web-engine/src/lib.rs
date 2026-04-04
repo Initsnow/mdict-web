@@ -215,27 +215,39 @@ impl DictionaryEngine {
         })
     }
 
-    pub fn suggest(
+    pub async fn suggest(
         &self,
-        dictionary: &LoadedDictionary,
+        dictionary: Arc<LoadedDictionary>,
         query: &str,
         limit: usize,
-    ) -> Vec<SuggestionItem> {
-        dictionary
-            .index
-            .suggest(
-                query,
-                dictionary.header.key_case_sensitive,
-                dictionary.header.strip_key,
-                limit,
-            )
+    ) -> Result<Vec<SuggestionItem>, ServiceError> {
+        let dictionary_id = dictionary.manifest.dictionary_id.clone();
+        let query = query.to_owned();
+        let keys = self
+            .run_blocking("suggest_lookup", move || {
+                dictionary
+                    .index
+                    .suggest(
+                        &dictionary.mdx,
+                        &query,
+                        dictionary.header.key_case_sensitive,
+                        dictionary.header.strip_key,
+                        limit,
+                    )
+                    .map_err(|error| {
+                        ServiceError::dictionary_unavailable(&dictionary_id, error.to_string())
+                    })
+            })
+            .await?;
+
+        Ok(keys
             .into_iter()
             .map(|key| SuggestionItem {
                 label: key.clone(),
                 key,
                 match_type: SuggestionMatchType::Prefix,
             })
-            .collect()
+            .collect())
     }
 
     pub async fn lookup(

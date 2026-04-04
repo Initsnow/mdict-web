@@ -143,7 +143,7 @@ mdict-web/
 每本词典不是单文件概念，而是一个 `DictionaryBundle`：
 
 - `dictionary_id`
-- 显示名、语言、标签
+- 显示名、语言
 - `mdx_path`
 - 配置层可写 `mdd_path` 或 `mdd_paths`；内部统一归一化为有序 `mdd_paths`
 - `entry_script_mode = none | original`，默认 `none`
@@ -170,7 +170,7 @@ mdict-web/
 
 1. API 层完成参数校验。
 2. `service` 直接进入 `engine`，或在显式开启缓存时先查 cache。
-3. `engine` 使用 sidecar 索引做 key 规范化 / 联想定位。
+3. `suggest` 路径使用 sidecar 索引做规范化前缀定位；exact lookup 继续走 `mdict-rs` 原生 key lookup。
 4. 需要命中正文时才调用 `mdict-rs` 读取 record。
 5. 返回前做 HTML 重写；仅在显式开启缓存时写入缓存。
 
@@ -183,19 +183,20 @@ mdict-web/
 - 启动或离线构建时仅扫描 key
 - 生成只读前缀索引
 - 至少支持：
-  - 规范化 key -> canonical key
+  - 规范化 key -> ordinal postings
   - prefix suggest
-  - 常用元信息缓存
+  - 通过 `mdict-rs::key_at(ordinal)` 按需还原 canonical key
 
 候选实现：
 
-- `fst` 优先，用于静态 key 集的前缀查找
-- 侧边文件记录重复 key 或额外元信息
+- `fst::Map` 记录 `normalized -> posting range`
+- 侧边 postings 文件记录稳定 key ordinal 列表
 
 原则：
 
 - 线上请求不做全量 key 扫描
 - 线上请求不为联想搜索解压 record block
+- 线上请求最多只为返回前几个候选而按 ordinal 做少量 key-block 读取；这部分仍必须放在阻塞线程池
 
 ### 6.3 缓存策略
 

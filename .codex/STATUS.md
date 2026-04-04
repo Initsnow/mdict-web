@@ -21,6 +21,7 @@
   - 全局多词典 aggregate suggest / lookup
   - exact lookup / suggest / entry content / resource content
   - `DictionaryBundle` 在程序内部统一使用 `mdd_paths` 有序列表；配置层允许单值 `mdd_path`，解析后会立刻归一化为 `mdd_paths`
+  - `DictionaryBundle` manifest 现支持省略 `display_name`，后端会回退到 `dictionary_id`；`description` / `source_lang` / `target_lang` 若省略或为空白字符串，则会在 API 中省略，前端不再显示占位空信息；`tags` 字段已从 manifest 与词典列表/详情 API 移除
   - MDX `@@@LINK=` alias 解析与最终词条跳转
   - 词条 HTML 中的 `entry://...` 交叉引用会重写到同词典 `entries/content`，不再误走资源接口
   - `sound://...` 音频资源 key 到实际 MDD 路径的服务端归一化
@@ -30,7 +31,7 @@
   - `DictionaryBundle` manifest 现支持 `theme_mode = auto | dictionary | force_auto_dark`：`auto` 默认做启发式检测，`dictionary` 信任词典自带暗色，`force_auto_dark` 则在前端 dark 模式下强制启用通用 auto-dark
   - 词条 HTML 中的音频链接会改写到 `data-audio-href` 非导航属性；后端会按需注入极小播放 runtime，避免跳到浏览器默认媒体页
   - HTML/CSS 重写与内容安全头
-  - sidecar suggest 索引
+  - sidecar suggest 索引现为 `normalized -> ordinal postings`；构建期只扫描 key，查询期再按需通过 `mdict-rs::key_at(ordinal)` 取回原词头
   - admin reload / healthz / readyz / metrics
   - 可选 entry/resource cache，默认关闭
   - 单元测试、真实词典 HTTP smoke test、criterion benchmark
@@ -56,7 +57,7 @@
 3. 列表 / 详情 / healthz / readyz / metrics / admin reload
 4. exact lookup / entry content / resource content
 5. HTML/CSS 重写与资源路径代理
-6. `fst` sidecar suggest 索引
+6. `fst::Map + ordinal postings` sidecar suggest 索引
 7. 可选缓存与命中指标
 8. 搜索优先首页、全局多词典搜索结果与 iframe 预览
 9. 单元测试、HTTP smoke test、criterion benchmark
@@ -70,6 +71,7 @@
 ## 已知风险
 
 - `mdict-rs` 当前 `FileSource` 的 `Mutex<File>` 可能在高并发热点词典下形成竞争
+- `suggest` 现在不再为构建索引扫描正文，但热路径也不再是纯内存返回；命中 sidecar 后仍会做少量 `key_at(ordinal)` 阻塞 key-block 读取，需要继续观察高并发下的收益与竞争
 - 词条 HTML 的资源重写覆盖面必须实测，尤其是 CSS `url(...)`、相对路径、奇怪的资源 key
 - 真实词典差异很大，必须用本地语料做回归
 - `mdict-rs` 是 `AGPL-3.0-only`，许可证策略必须尽早确认
@@ -218,9 +220,33 @@
 - 首页 viewer 会按当前词典的 `theme_mode` 决定是否跳过 auto-dark、沿用启发式检测，或在 dark 模式下强制启用通用 auto-dark
 - 新增配置与 HTTP smoke 覆盖，并保持 `cargo test --workspace` 和 `pnpm --dir frontend run build` 通过
 2026-04-04 修复搜索候选项过快回车导致误选的问题：
+
 - 在 `GlobalSearchBar` 的 `onChange` 中强制同步重置 `activeIndex` 为 `-1`
 - 解决输入过快时，旧的候选项高亮状态因异步更新延迟而在回车时被误选的问题
 - 已验证 `pnpm run build` 构建通过
+
+2026-04-04 为词典 manifest 可选展示字段再次执行同一命令：
+
+- `lookup/ldoce_apple`: `968.85 µs .. 975.42 µs`
+- `lookup/ldoce_suggest_app`: `8.4067 µs .. 8.5999 µs`
+- `lookup/ldoce_entry_content_apple`: `6.9124 ms .. 7.5359 ms`
+
+说明：
+
+- 这次把 `display_name` 改成配置层可选，缺省或空白时后端回退到 `dictionary_id`；`description` / `source_lang` / `target_lang` 若省略或写成空白字符串，会在 API 中直接省略，前端词典卡片也不再显示空元信息
+- 改动主要集中在配置解析、DTO 契约和前端显示层，不在词条正文热路径上；这轮短样本里 `entry_content` 的统计回归更可能来自测量波动或环境噪声，暂不把这次结果直接解释成稳定性能退化
+
+2026-04-04 为 sidecar suggest 方案 1（`normalized -> ordinal postings`）再次执行同一命令：
+
+- `lookup/ldoce_apple`: `990.96 µs .. 997.17 µs`
+- `lookup/ldoce_suggest_app`: `31.968 µs .. 41.936 µs`
+- `lookup/ldoce_entry_content_apple`: `5.7553 ms .. 6.1730 ms`
+
+说明：
+
+- 这次把 sidecar 从“`normalized + canonical` composite key FST”切到“`fst::Map(normalized -> posting range)` + ordinals blob”，并改成构建期只走 `mdict-rs::keys_with_ordinals()`；首次迁移重建四本词典后，warm startup 仍约 `431 ms`
+- 本地 `index/` 总大小从旧格式约 `27.3 MB` 降到新格式约 `18.1 MB`；其中 `b` 从 `9.1 MB` 降到 `5.6 MB`，`oald10` 从 `10.6 MB` 降到 `7.0 MB`
+- 代价是 `suggest` warm path 不再是纯内存 composite key 直接回 canonical 字符串，而是命中 sidecar 后再做少量 `key_at(ordinal)`；这轮短样本里 `lookup` 小幅回归、`suggest` 明显回归、`entry_content` 改善。这个取舍是预期内的，但是否值得长期保留还需要结合真实并发与启动收益继续评估
 
 ## 实现约束
 

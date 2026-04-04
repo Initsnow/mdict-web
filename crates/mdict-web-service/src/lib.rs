@@ -173,7 +173,7 @@ impl DictionaryService {
             .unwrap_or(DEFAULT_SUGGEST_LIMIT)
             .min(MAX_SUGGEST_LIMIT);
         let dictionary = self.ready_dictionary(dictionary_id)?;
-        let items = self.engine.suggest(&dictionary, &query, limit);
+        let items = self.engine.suggest(dictionary, &query, limit).await?;
         Ok(SuggestResponse {
             dictionary_id: dictionary_id.to_owned(),
             query,
@@ -192,12 +192,15 @@ impl DictionaryService {
             .unwrap_or(DEFAULT_SUGGEST_LIMIT)
             .min(MAX_SUGGEST_LIMIT);
         let dictionaries = self.selected_dictionaries(&dictionary_ids)?;
-        let mut groups = dictionaries
-            .into_iter()
-            .map(|dictionary| {
-                let dictionary_id = dictionary.manifest.dictionary_id.clone();
-                self.engine
-                    .suggest(&dictionary, &query, limit)
+        let mut groups = Vec::new();
+        for dictionary in dictionaries {
+            let dictionary_id = dictionary.manifest.dictionary_id.clone();
+            let items = self.engine.suggest(dictionary, &query, limit).await?;
+            if items.is_empty() {
+                continue;
+            }
+            groups.push(
+                items
                     .into_iter()
                     .map(|item| SearchSuggestionItem {
                         dictionary_id: dictionary_id.clone(),
@@ -205,10 +208,9 @@ impl DictionaryService {
                         label: item.label,
                         match_type: item.match_type,
                     })
-                    .collect::<VecDeque<_>>()
-            })
-            .filter(|items| !items.is_empty())
-            .collect::<Vec<_>>();
+                    .collect::<VecDeque<_>>(),
+            );
+        }
 
         let mut items = Vec::with_capacity(limit);
         while items.len() < limit {
@@ -364,7 +366,6 @@ impl DictionaryState {
                 entry_count: 0,
                 has_resources: unavailable.manifest.has_resources(),
                 theme_mode: map_theme_mode(unavailable.manifest.theme_mode),
-                tags: unavailable.manifest.tags.clone(),
                 status: DictionaryStatus::Unavailable,
             },
         }
@@ -381,7 +382,6 @@ fn state_summary_ready(dictionary: &LoadedDictionary) -> DictionarySummary {
         entry_count: dictionary.entry_count,
         has_resources: dictionary.manifest.has_resources(),
         theme_mode: map_theme_mode(dictionary.manifest.theme_mode),
-        tags: dictionary.manifest.tags.clone(),
         status: DictionaryStatus::Ready,
     }
 }

@@ -1,23 +1,28 @@
 use std::collections::HashSet;
 use std::fs;
+use std::mem::size_of;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use fst::{Automaton, IntoStreamer, Streamer};
-use mdict_rs::{Header, MdxFile};
+use fst::{Automaton, IntoStreamer, Map, MapBuilder, Streamer};
+use mdict_rs::{Header, KeyOrdinal, MdxFile};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-const KEY_SEPARATOR: char = '\u{1f}';
+const INDEX_FORMAT_VERSION: u32 = 2;
+const POSTING_ORDINAL_BYTES: usize = size_of::<u32>();
 
 #[derive(Debug)]
 pub struct DictionarySuggestIndex {
-    set: fst::Set<Vec<u8>>,
+    map: Map<Vec<u8>>,
+    postings: Vec<u8>,
     metadata: DictionaryIndexMetadata,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DictionaryIndexMetadata {
+    #[serde(default = "index_format_version")]
+    pub format_version: u32,
     pub dictionary_id: String,
     pub mdx_size: u64,
     pub mdx_modified_millis: u128,
@@ -32,8 +37,10 @@ pub enum IndexError {
     Metadata(#[from] serde_json::Error),
     #[error("fst error: {0}")]
     Fst(#[from] fst::Error),
-    #[error("failed to iterate mdx entries: {0}")]
+    #[error("failed to iterate mdx keys: {0}")]
     Mdict(#[from] mdict_rs::Error),
+    #[error("index data is invalid: {0}")]
+    InvalidData(String),
 }
 
 impl DictionarySuggestIndex {
@@ -49,6 +56,7 @@ impl DictionarySuggestIndex {
         fs::create_dir_all(dir)?;
 
         let expected = DictionaryIndexMetadata {
+            format_version: index_format_version(),
             dictionary_id: dictionary_id.to_owned(),
             mdx_size: fs::metadata(mdx_path)?.len(),
             mdx_modified_millis: modified_millis(mdx_path)?,
@@ -56,54 +64,74 @@ impl DictionarySuggestIndex {
         };
         let paths = IndexPaths::new(dir, dictionary_id);
 
-        if !rebuild_on_startup && paths.meta.exists() && paths.set.exists() {
-            let metadata: DictionaryIndexMetadata =
-                serde_json::from_slice(&fs::read(&paths.meta)?)?;
-            if metadata == expected {
-                return Self::load_from_files(paths, metadata);
+        if !rebuild_on_startup
+            && paths.meta.exists()
+            && paths.map.exists()
+            && paths.postings.exists()
+        {
+            if let Ok(metadata) = fs::read(&paths.meta)
+                .and_then(|bytes| serde_json::from_slice(&bytes).map_err(std::io::Error::other))
+            {
+                if metadata == expected {
+                    if let Ok(index) = Self::load_from_files(&paths, metadata) {
+                        return Ok(index);
+                    }
+                }
             }
         }
 
-        Self::build_from_mdx(paths, expected, header, mdx)
+        Self::build_from_mdx(&paths, expected, header, mdx)
     }
 
     pub fn suggest(
         &self,
+        mdx: &MdxFile,
         query: &str,
         case_sensitive: bool,
         strip_key: bool,
         limit: usize,
-    ) -> Vec<String> {
+    ) -> Result<Vec<String>, IndexError> {
         if limit == 0 {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         let normalized = normalize_key(query, case_sensitive, strip_key);
         if normalized.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         let automaton = fst::automaton::Str::new(&normalized).starts_with();
-        let mut stream = self.set.search(automaton).into_stream();
+        let mut stream = self.map.search(automaton).into_stream();
         let mut seen = HashSet::new();
         let mut out = Vec::with_capacity(limit);
 
-        while let Some(raw) = stream.next() {
-            let Ok(composite) = std::str::from_utf8(raw) else {
-                continue;
-            };
-            let Some((_, canonical)) = split_composite_key(composite) else {
-                continue;
-            };
-            if seen.insert(canonical.to_owned()) {
-                out.push(canonical.to_owned());
-            }
-            if out.len() >= limit {
-                break;
+        while let Some((_raw, packed_range)) = stream.next() {
+            let (start, count) = unpack_posting_range(packed_range);
+            for posting_index in start..start.saturating_add(count) {
+                let ordinal =
+                    posting_ordinal_at(&self.postings, posting_index).ok_or_else(|| {
+                        IndexError::InvalidData(format!(
+                            "posting index {posting_index} is out of range for suggest postings"
+                        ))
+                    })?;
+                let canonical = mdx
+                    .key_at(KeyOrdinal::from(u64::from(ordinal)))?
+                    .ok_or_else(|| {
+                        IndexError::InvalidData(format!(
+                            "ordinal {} resolved to no key in source dictionary",
+                            ordinal
+                        ))
+                    })?;
+                if seen.insert(canonical.clone()) {
+                    out.push(canonical);
+                }
+                if out.len() >= limit {
+                    return Ok(out);
+                }
             }
         }
 
-        out
+        Ok(out)
     }
 
     pub fn metadata(&self) -> &DictionaryIndexMetadata {
@@ -111,45 +139,85 @@ impl DictionarySuggestIndex {
     }
 
     fn build_from_mdx(
-        paths: IndexPaths,
+        paths: &IndexPaths,
         metadata: DictionaryIndexMetadata,
         header: &Header,
         mdx: &MdxFile,
     ) -> Result<Self, IndexError> {
-        let mut composite_keys = Vec::with_capacity(metadata.entry_count as usize);
-        for entry in mdx.entries() {
+        let mut normalized_ordinals =
+            Vec::with_capacity(metadata.entry_count.min(usize::MAX as u64) as usize);
+        for entry in mdx.keys_with_ordinals() {
             let entry = entry?;
             let normalized = normalize_key(&entry.key, header.key_case_sensitive, header.strip_key);
-            composite_keys.push(compose_key(&normalized, &entry.key));
+            if normalized.is_empty() {
+                continue;
+            }
+            let ordinal = u32::try_from(u64::from(entry.ordinal)).map_err(|_| {
+                IndexError::InvalidData(format!(
+                    "key ordinal {} exceeds u32 range",
+                    entry.ordinal.get()
+                ))
+            })?;
+            normalized_ordinals.push((normalized, ordinal));
         }
-        composite_keys.sort_unstable();
-        composite_keys.dedup();
+        normalized_ordinals
+            .sort_unstable_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
 
-        let mut bytes = Vec::new();
+        let mut map_bytes = Vec::new();
+        let mut postings = Vec::with_capacity(normalized_ordinals.len() * POSTING_ORDINAL_BYTES);
         {
-            let mut builder = fst::SetBuilder::new(&mut bytes)?;
-            for key in &composite_keys {
-                builder.insert(key)?;
+            let mut builder = MapBuilder::new(&mut map_bytes)?;
+            let mut index = 0usize;
+            while index < normalized_ordinals.len() {
+                let normalized = normalized_ordinals[index].0.clone();
+                let start =
+                    u32::try_from(postings.len() / POSTING_ORDINAL_BYTES).map_err(|_| {
+                        IndexError::InvalidData("suggest postings exceed u32 range".to_owned())
+                    })?;
+                let mut count = 0u32;
+                while index < normalized_ordinals.len()
+                    && normalized_ordinals[index].0 == normalized
+                {
+                    postings.extend_from_slice(&normalized_ordinals[index].1.to_le_bytes());
+                    count = count.checked_add(1).ok_or_else(|| {
+                        IndexError::InvalidData(format!(
+                            "suggest postings for normalized key `{normalized}` exceed u32 range"
+                        ))
+                    })?;
+                    index += 1;
+                }
+                builder.insert(&normalized, pack_posting_range(start, count))?;
             }
             builder.finish()?;
         }
 
-        fs::write(&paths.set, &bytes)?;
+        fs::write(&paths.map, &map_bytes)?;
+        fs::write(&paths.postings, &postings)?;
         fs::write(&paths.meta, serde_json::to_vec_pretty(&metadata)?)?;
 
         Ok(Self {
-            set: fst::Set::new(bytes)?,
+            map: Map::new(map_bytes)?,
+            postings,
             metadata,
         })
     }
 
     fn load_from_files(
-        paths: IndexPaths,
+        paths: &IndexPaths,
         metadata: DictionaryIndexMetadata,
     ) -> Result<Self, IndexError> {
-        let bytes = fs::read(paths.set)?;
+        let map_bytes = fs::read(&paths.map)?;
+        let postings = fs::read(&paths.postings)?;
+        if postings.len() % POSTING_ORDINAL_BYTES != 0 {
+            return Err(IndexError::InvalidData(format!(
+                "suggest postings byte length {} is not aligned to {}",
+                postings.len(),
+                POSTING_ORDINAL_BYTES
+            )));
+        }
         Ok(Self {
-            set: fst::Set::new(bytes)?,
+            map: Map::new(map_bytes)?,
+            postings,
             metadata,
         })
     }
@@ -169,14 +237,6 @@ pub fn normalize_key(key: &str, case_sensitive: bool, strip_key: bool) -> String
     }
 }
 
-fn compose_key(normalized: &str, canonical: &str) -> String {
-    format!("{normalized}{KEY_SEPARATOR}{canonical}")
-}
-
-fn split_composite_key(input: &str) -> Option<(&str, &str)> {
-    input.split_once(KEY_SEPARATOR)
-}
-
 fn modified_millis(path: &Path) -> Result<u128, std::io::Error> {
     let modified = fs::metadata(path)?
         .modified()
@@ -189,17 +249,38 @@ fn modified_millis(path: &Path) -> Result<u128, std::io::Error> {
 
 #[derive(Debug, Clone)]
 struct IndexPaths {
-    set: PathBuf,
+    map: PathBuf,
+    postings: PathBuf,
     meta: PathBuf,
 }
 
 impl IndexPaths {
     fn new(dir: &Path, dictionary_id: &str) -> Self {
         Self {
-            set: dir.join(format!("{dictionary_id}.suggest.fst")),
+            map: dir.join(format!("{dictionary_id}.suggest.fst")),
+            postings: dir.join(format!("{dictionary_id}.suggest.ordinals.bin")),
             meta: dir.join(format!("{dictionary_id}.suggest.meta.json")),
         }
     }
+}
+
+fn index_format_version() -> u32 {
+    INDEX_FORMAT_VERSION
+}
+
+fn pack_posting_range(start: u32, count: u32) -> u64 {
+    (u64::from(start) << 32) | u64::from(count)
+}
+
+fn unpack_posting_range(value: u64) -> (usize, usize) {
+    (((value >> 32) as u32) as usize, (value as u32) as usize)
+}
+
+fn posting_ordinal_at(postings: &[u8], index: usize) -> Option<u32> {
+    let start = index.checked_mul(POSTING_ORDINAL_BYTES)?;
+    let end = start.checked_add(POSTING_ORDINAL_BYTES)?;
+    let chunk = postings.get(start..end)?;
+    Some(u32::from_le_bytes(chunk.try_into().ok()?))
 }
 
 #[cfg(test)]
@@ -213,10 +294,18 @@ mod tests {
     }
 
     #[test]
-    fn composite_key_round_trip_works() {
-        let composite = compose_key("apple", "Apple");
-        let parsed = split_composite_key(&composite).expect("composite key should parse");
-        assert_eq!(parsed.0, "apple");
-        assert_eq!(parsed.1, "Apple");
+    fn posting_range_round_trip_works() {
+        let packed = pack_posting_range(42, 7);
+        assert_eq!(unpack_posting_range(packed), (42, 7));
+    }
+
+    #[test]
+    fn posting_ordinal_round_trip_works() {
+        let mut postings = Vec::new();
+        postings.extend_from_slice(&12u32.to_le_bytes());
+        postings.extend_from_slice(&34u32.to_le_bytes());
+        assert_eq!(posting_ordinal_at(&postings, 0), Some(12));
+        assert_eq!(posting_ordinal_at(&postings, 1), Some(34));
+        assert_eq!(posting_ordinal_at(&postings, 2), None);
     }
 }
