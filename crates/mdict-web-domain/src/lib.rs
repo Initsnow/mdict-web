@@ -17,6 +17,14 @@ pub enum DictionaryStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ThemeMode {
+    Auto,
+    Dictionary,
+    ForceAutoDark,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LookupMatchType {
     Exact,
     Normalized,
@@ -203,6 +211,7 @@ pub struct DictionarySummary {
     pub target_lang: Option<String>,
     pub entry_count: u64,
     pub has_resources: bool,
+    pub theme_mode: ThemeMode,
     pub tags: Vec<String>,
     pub status: DictionaryStatus,
 }

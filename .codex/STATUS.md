@@ -12,6 +12,7 @@
   - `crates/mdict-web-http`
   - `crates/mdict-web-app`
 - 已有独立 `frontend/`，实现了搜索优先首页和单词典详情页
+- 前端 `EntryViewer` 现在会在同源词条 iframe 内注入通用 auto-dark runtime，跟随父页面 light/dark 状态做启发式夜间模式适配，而不是为单本词典写死 CSS
 - 后端在 `frontend/dist` 存在时可直接通过 `axum` 同源托管前端静态资源
 - 词条 HTML 的 `304 Not Modified` 响应会保留与 `200` 一致的安全头，避免浏览器缓存复用旧 CSP
 - 后端已具备：
@@ -26,6 +27,7 @@
   - 同名 `.css` / `.js` 资源会优先使用 MDX 同目录下的 sidecar 文件，而不是 MDD 中的同名资源
   - 词条 HTML / CSS 中改写出来的资源 URL 现在只编码 query 中真正有歧义的字符，保留 `_` / `-` / `.` / `/` / `:` 等常见文件名与路径符号，避免词典样式依赖 `src` / `href` 原始片段时失效
   - `DictionaryBundle` manifest 现支持 `entry_script_mode = none | original`：`none` 默认移除词典脚本 / 事件属性 / `javascript:` 链接，`original` 则保留词典原始脚本并放宽词条页 CSP 到允许同源脚本
+  - `DictionaryBundle` manifest 现支持 `theme_mode = auto | dictionary | force_auto_dark`：`auto` 默认做启发式检测，`dictionary` 信任词典自带暗色，`force_auto_dark` 则在前端 dark 模式下强制启用通用 auto-dark
   - 词条 HTML 中的音频链接会改写到 `data-audio-href` 非导航属性；后端会按需注入极小播放 runtime，避免跳到浏览器默认媒体页
   - HTML/CSS 重写与内容安全头
   - sidecar suggest 索引
@@ -40,6 +42,8 @@
 - API 合同以 `docs/API_CONTRACT.md` 为准
 - 词条正文和 JSON 元数据分离返回
 - 词条正文必须经过 HTML/CSS 重写，默认通过 sandboxed iframe 展示
+- 夜间模式适配优先由前端 iframe viewer 的通用 runtime 处理，不把词典兼容做成单词典 CSS 补丁集合
+- 若词典本身已有成熟暗色支持，优先通过 `theme_mode = "dictionary"` 显式声明，而不是继续放任通用 auto-dark 猜测
 - 联想搜索必须依赖 sidecar 索引，不能在线扫描全量词条
 - `mdict-rs` 的同步阻塞 I/O 只能放到专用阻塞线程池
 - 采用低内存优先策略：应用层 entry/resource cache 默认关闭
@@ -75,6 +79,7 @@
 - `entry_script_mode = "original"` 会显著放宽词条安全边界，只适合用户显式信任的词典
 - `entry_script_mode = "original"` 下，词典原始脚本还可能引用并不存在于 MDD 且也不在 MDX 同目录 `.css` / `.js` sidecar 范围内的 companion 文件；这类 404 仍需要按具体词典评估
 - 词典原始脚本对音频点击的默认行为并不可靠；当前浏览器侧依赖 entry HTML 内按需注入的最小播放 runtime 来消费 `data-audio-href`
+- 前端 iframe 的 auto-dark 仍是启发式方案；带复杂背景图、精细配色语义或本身已支持暗色的词典仍需要持续用真实语料回归
 
 ## 基准记录
 
@@ -199,6 +204,18 @@
 - 词条查看器高度在手机端从 `40rem` 调整为 `30rem`
 - 搜索结果存在时，手机端 Header 间距与 Logo/标题尺寸同步做更紧凑处理，提升首屏信息密度
 - 前端已同步执行 `pnpm run build` 并验证构建通过
+
+2026-04-04 为 iframe 词条查看器夜间模式适配：
+
+- 不再沿着“给某本词典补 CSS”这条路走，改为在前端 `EntryViewer` 对每个同源 iframe 注入通用 auto-dark runtime
+- runtime 会跟随父页面主题状态，在夜间模式下只对看起来仍是亮底深字的词条启用启发式 auto-dark，并对图片/视频/背景图节点做 re-invert，尽量避免误伤多词典内容
+- 这次改动保持后端 entry CSP 和 HTML 重写链路不变，只调整前端 viewer 行为
+
+2026-04-04 为词典级 `theme_mode` 配置：
+
+- 词典 manifest、词典列表/详情 API 与前端 `EntryViewer` 现已打通 `theme_mode = auto | dictionary | force_auto_dark`
+- 首页 viewer 会按当前词典的 `theme_mode` 决定是否跳过 auto-dark、沿用启发式检测，或在 dark 模式下强制启用通用 auto-dark
+- 新增配置与 HTTP smoke 覆盖，并保持 `cargo test --workspace` 和 `pnpm --dir frontend run build` 通过
 
 ## 实现约束
 

@@ -42,6 +42,15 @@ async fn local_fixture_http_smoke_test() {
         .await
         .expect("list request should succeed");
     assert_eq!(list.status(), StatusCode::OK);
+    let list_body = to_bytes(list.into_body(), usize::MAX)
+        .await
+        .expect("list body should decode");
+    let list_text = String::from_utf8(list_body.to_vec()).expect("list body is utf-8");
+    assert!(list_text.contains("\"theme_mode\":\"auto\""), "{list_text}");
+    assert!(
+        list_text.contains("\"theme_mode\":\"dictionary\""),
+        "{list_text}"
+    );
 
     let frontend_index = app
         .clone()
@@ -497,6 +506,7 @@ display_name = "LDOCE5++"
 mdx_path = "{}"
 mdd_paths = [{}]
 entry_script_mode = "none"
+theme_mode = "auto"
 
 [[catalog.bundles]]
 dictionary_id = "ldoce5pp_alt"
@@ -504,6 +514,7 @@ display_name = "LDOCE5++ Alt"
 mdx_path = "{}"
 mdd_paths = [{}]
 entry_script_mode = "original"
+theme_mode = "dictionary"
 "#,
         dir.join("index").display(),
         mdx_path.display(),

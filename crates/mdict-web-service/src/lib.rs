@@ -6,7 +6,7 @@ use mdict_web_config::{AppConfig, DictionaryBundleManifest};
 use mdict_web_domain::{
     DictionaryDetail, DictionaryListResponse, DictionaryStatus, DictionarySummary, LookupResult,
     ReadinessResponse, ReloadResponse, RenderedEntryContent, ResourceContent, SearchLookupResponse,
-    SearchSuggestResponse, SearchSuggestionItem, ServiceError, SuggestResponse,
+    SearchSuggestResponse, SearchSuggestionItem, ServiceError, SuggestResponse, ThemeMode,
 };
 use mdict_web_engine::{DictionaryEngine, LoadedDictionary};
 use thiserror::Error;
@@ -363,6 +363,7 @@ impl DictionaryState {
                 target_lang: unavailable.manifest.target_lang.clone(),
                 entry_count: 0,
                 has_resources: unavailable.manifest.has_resources(),
+                theme_mode: map_theme_mode(unavailable.manifest.theme_mode),
                 tags: unavailable.manifest.tags.clone(),
                 status: DictionaryStatus::Unavailable,
             },
@@ -379,8 +380,17 @@ fn state_summary_ready(dictionary: &LoadedDictionary) -> DictionarySummary {
         target_lang: dictionary.manifest.target_lang.clone(),
         entry_count: dictionary.entry_count,
         has_resources: dictionary.manifest.has_resources(),
+        theme_mode: map_theme_mode(dictionary.manifest.theme_mode),
         tags: dictionary.manifest.tags.clone(),
         status: DictionaryStatus::Ready,
+    }
+}
+
+fn map_theme_mode(theme_mode: mdict_web_config::ThemeMode) -> ThemeMode {
+    match theme_mode {
+        mdict_web_config::ThemeMode::Auto => ThemeMode::Auto,
+        mdict_web_config::ThemeMode::Dictionary => ThemeMode::Dictionary,
+        mdict_web_config::ThemeMode::ForceAutoDark => ThemeMode::ForceAutoDark,
     }
 }
 

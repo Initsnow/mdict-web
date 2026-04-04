@@ -2,6 +2,7 @@
 
 export type DictionaryStatus = "ready" | "loading" | "unavailable" | "error";
 export type MatchType = "exact" | "normalized" | "prefix";
+export type ThemeMode = "auto" | "dictionary" | "force_auto_dark";
 
 export interface DictionarySummary {
   dictionary_id: string;
@@ -11,6 +12,7 @@ export interface DictionarySummary {
   target_lang: string;
   entry_count: number;
   has_resources: boolean;
+  theme_mode: ThemeMode;
   tags: string[];
   status: DictionaryStatus;
 }

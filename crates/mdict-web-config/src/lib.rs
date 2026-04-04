@@ -164,6 +164,8 @@ pub struct DictionaryBundleManifest {
     #[serde(default)]
     pub entry_script_mode: EntryScriptMode,
     #[serde(default)]
+    pub theme_mode: ThemeMode,
+    #[serde(default)]
     pub passcode: Option<PasscodeConfig>,
     #[serde(default)]
     pub metadata: BTreeMap<String, String>,
@@ -175,6 +177,15 @@ pub enum EntryScriptMode {
     #[default]
     None,
     Original,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeMode {
+    #[default]
+    Auto,
+    Dictionary,
+    ForceAutoDark,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -427,6 +438,7 @@ mod tests {
                 mdx_path: PathBuf::from("/tmp/demo.mdx"),
                 mdd_paths: vec![],
                 entry_script_mode: EntryScriptMode::None,
+                theme_mode: ThemeMode::Auto,
                 passcode: None,
                 metadata: BTreeMap::new(),
             },
@@ -440,6 +452,7 @@ mod tests {
                 mdx_path: PathBuf::from("/tmp/demo-2.mdx"),
                 mdd_paths: vec![],
                 entry_script_mode: EntryScriptMode::None,
+                theme_mode: ThemeMode::Auto,
                 passcode: None,
                 metadata: BTreeMap::new(),
             },
@@ -515,11 +528,39 @@ mdd_paths = ["dict/demo.1.mdd", "dict/demo.2.mdd"]
             mdx_path,
             mdd_paths: vec![mdd_path.clone(), mdd_path],
             entry_script_mode: EntryScriptMode::None,
+            theme_mode: ThemeMode::Auto,
             passcode: None,
             metadata: BTreeMap::new(),
         }];
 
         let error = validate_manifests(&manifests).expect_err("duplicate mdd paths must fail");
         assert!(error.to_string().contains("duplicate mdd path configured"));
+    }
+
+    #[test]
+    fn manifest_theme_mode_defaults_to_auto() {
+        let manifest = toml::from_str::<DictionaryBundleManifest>(
+            r#"
+dictionary_id = "demo"
+display_name = "Demo"
+mdx_path = "demo.mdx"
+"#,
+        )
+        .expect("manifest should parse");
+        assert_eq!(manifest.theme_mode, ThemeMode::Auto);
+    }
+
+    #[test]
+    fn manifest_accepts_force_auto_dark_theme_mode() {
+        let manifest = toml::from_str::<DictionaryBundleManifest>(
+            r#"
+dictionary_id = "demo"
+display_name = "Demo"
+mdx_path = "demo.mdx"
+theme_mode = "force_auto_dark"
+"#,
+        )
+        .expect("manifest should parse");
+        assert_eq!(manifest.theme_mode, ThemeMode::ForceAutoDark);
     }
 }

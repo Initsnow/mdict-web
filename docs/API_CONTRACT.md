@@ -69,6 +69,7 @@
   "target_lang": "en",
   "entry_count": 125000,
   "has_resources": true,
+  "theme_mode": "auto",
   "tags": ["english", "learner"],
   "status": "ready"
 }
@@ -85,6 +86,7 @@
   "target_lang": "en",
   "entry_count": 125000,
   "has_resources": true,
+  "theme_mode": "auto",
   "tags": ["english", "learner"],
   "status": "ready",
   "header": {
@@ -96,6 +98,13 @@
   }
 }
 ```
+
+说明：
+
+- `theme_mode`: 词典级夜间模式策略，取值为 `auto | dictionary | force_auto_dark`
+- `theme_mode = auto`: 前端 viewer 在 dark 模式下按渲染结果做启发式 auto-dark；若词条本身已是暗色，则跳过反相
+- `theme_mode = dictionary`: 前端 viewer 信任词典自身主题，不再做 auto-dark 兜底
+- `theme_mode = force_auto_dark`: 前端 viewer 在 dark 模式下强制启用通用 auto-dark，适合明确只有亮色样式的词典
 
 ### 2.3 SuggestionItem
 
@@ -201,6 +210,7 @@
       "target_lang": "en",
       "entry_count": 125000,
       "has_resources": true,
+      "theme_mode": "auto",
       "tags": ["english", "learner"],
       "status": "ready"
     }
@@ -394,6 +404,8 @@
 - 默认用 sandboxed iframe 渲染
 - iframe 需要允许脚本执行，因为部分词典可显式启用 `entry_script_mode = original`
 - iframe 需要允许后端注入的最小音频 runtime 执行
+- 前端 viewer 可以在同源 iframe 内注入自有 theme runtime，同步父页面 light/dark 状态；夜间模式适配应优先走通用 iframe 运行时，而不是为单本词典写死选择器
+- 前端 viewer 需要遵守词典摘要中的 `theme_mode`：`auto` 做启发式检测，`dictionary` 跳过 auto-dark，`force_auto_dark` 在 dark 模式下强制启用通用 auto-dark
 - 不直接把返回内容插进主应用 DOM
 
 条件请求：

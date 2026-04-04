@@ -148,6 +148,9 @@ export function HomePage() {
   const dictionaryLabels = Object.fromEntries(
     dictionaries.map((d) => [d.dictionary_id, d.display_name])
   );
+  const dictionaryThemeModes = Object.fromEntries(
+    dictionaries.map((d) => [d.dictionary_id, d.theme_mode])
+  );
   const totalEntries = readyDictionaries.reduce((s, d) => s + d.entry_count, 0);
 
   const { suggestions, isLoading: suggestLoading } = useSearchSuggest({
@@ -302,7 +305,11 @@ export function HomePage() {
                   </span>
                 </h2>
               </div>
-              <EntryViewer contentUrl={activeResult.content_url} className="h-[30rem] lg:h-[40rem]" />
+              <EntryViewer
+                contentUrl={activeResult.content_url}
+                themeMode={dictionaryThemeModes[activeResult.dictionary_id]}
+                className="h-[30rem] lg:h-[40rem]"
+              />
             </div>
           </section>
         ) : null}

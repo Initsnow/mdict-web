@@ -147,6 +147,7 @@ mdict-web/
 - `mdx_path`
 - 可选 `mdd_paths` 有序列表
 - `entry_script_mode = none | original`，默认 `none`
+- `theme_mode = auto | dictionary | force_auto_dark`，默认 `auto`
 - 可选 passcode
 - 可选额外前端展示元信息
 
@@ -279,6 +280,8 @@ MDict 文件和其中 HTML/资源都视为不可信输入。
 
 - 默认在 sandboxed iframe 中渲染词条
 - iframe 需要兼容 `entry_script_mode = "original"` 的脚本执行，但默认词典不导入脚本
+- light/dark 主题适配优先由前端 viewer 在同源 iframe 内执行通用 runtime；不要把夜间模式实现收敛成某本词典专用 CSS
+- 前端 viewer 需要遵守词典级 `theme_mode`：`auto` 做启发式检测，`dictionary` 信任词典自带暗色，`force_auto_dark` 在 dark 模式下强制启用通用 auto-dark
 
 ### 7.3 资源访问层
 
