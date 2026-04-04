@@ -11,6 +11,7 @@ use thiserror::Error;
 
 const INDEX_FORMAT_VERSION: u32 = 2;
 const POSTING_ORDINAL_BYTES: usize = size_of::<u32>();
+const KEYS_AT_BATCH_THRESHOLD: usize = 16;
 
 #[derive(Debug)]
 pub struct DictionarySuggestIndex {
@@ -104,6 +105,8 @@ impl DictionarySuggestIndex {
         let mut stream = self.map.search(automaton).into_stream();
         let mut seen = HashSet::new();
         let mut out = Vec::with_capacity(limit);
+        let mut pending = Vec::new();
+        let batch_size = suggest_batch_size(limit);
 
         while let Some((_raw, packed_range)) = stream.next() {
             let (start, count) = unpack_posting_range(packed_range);
@@ -114,21 +117,18 @@ impl DictionarySuggestIndex {
                             "posting index {posting_index} is out of range for suggest postings"
                         ))
                     })?;
-                let canonical = mdx
-                    .key_at(KeyOrdinal::from(u64::from(ordinal)))?
-                    .ok_or_else(|| {
-                        IndexError::InvalidData(format!(
-                            "ordinal {} resolved to no key in source dictionary",
-                            ordinal
-                        ))
-                    })?;
-                if seen.insert(canonical.clone()) {
-                    out.push(canonical);
-                }
-                if out.len() >= limit {
-                    return Ok(out);
+                pending.push(KeyOrdinal::from(u64::from(ordinal)));
+                if pending.len() >= batch_size {
+                    hydrate_pending_keys(mdx, &mut pending, &mut seen, &mut out, limit)?;
+                    if out.len() >= limit {
+                        return Ok(out);
+                    }
                 }
             }
+        }
+
+        if !pending.is_empty() {
+            hydrate_pending_keys(mdx, &mut pending, &mut seen, &mut out, limit)?;
         }
 
         Ok(out)
@@ -283,6 +283,53 @@ fn posting_ordinal_at(postings: &[u8], index: usize) -> Option<u32> {
     Some(u32::from_le_bytes(chunk.try_into().ok()?))
 }
 
+fn suggest_batch_size(limit: usize) -> usize {
+    limit.max(16).saturating_mul(4)
+}
+
+fn hydrate_pending_keys(
+    mdx: &MdxFile,
+    pending: &mut Vec<KeyOrdinal>,
+    seen: &mut HashSet<String>,
+    out: &mut Vec<String>,
+    limit: usize,
+) -> Result<(), IndexError> {
+    if pending.len() >= KEYS_AT_BATCH_THRESHOLD {
+        let resolved = mdx.keys_at(pending)?;
+        for (ordinal, maybe_key) in pending.iter().copied().zip(resolved.into_iter()) {
+            let canonical = maybe_key.ok_or_else(|| {
+                IndexError::InvalidData(format!(
+                    "ordinal {} resolved to no key in source dictionary",
+                    ordinal.get()
+                ))
+            })?;
+            if seen.insert(canonical.clone()) {
+                out.push(canonical);
+            }
+            if out.len() >= limit {
+                break;
+            }
+        }
+    } else {
+        for ordinal in pending.iter().copied() {
+            let canonical = mdx.key_at(ordinal)?.ok_or_else(|| {
+                IndexError::InvalidData(format!(
+                    "ordinal {} resolved to no key in source dictionary",
+                    ordinal.get()
+                ))
+            })?;
+            if seen.insert(canonical.clone()) {
+                out.push(canonical);
+            }
+            if out.len() >= limit {
+                break;
+            }
+        }
+    }
+    pending.clear();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,5 +354,16 @@ mod tests {
         assert_eq!(posting_ordinal_at(&postings, 0), Some(12));
         assert_eq!(posting_ordinal_at(&postings, 1), Some(34));
         assert_eq!(posting_ordinal_at(&postings, 2), None);
+    }
+
+    #[test]
+    fn suggest_batch_size_scales_with_limit() {
+        assert_eq!(suggest_batch_size(1), 64);
+        assert_eq!(suggest_batch_size(20), 80);
+    }
+
+    #[test]
+    fn keys_at_batch_threshold_prefers_small_inline_path() {
+        assert!(KEYS_AT_BATCH_THRESHOLD > 1);
     }
 }

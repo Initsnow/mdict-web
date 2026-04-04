@@ -31,7 +31,7 @@
   - `DictionaryBundle` manifest 现支持 `theme_mode = auto | dictionary | force_auto_dark`：`auto` 默认做启发式检测，`dictionary` 信任词典自带暗色，`force_auto_dark` 则在前端 dark 模式下强制启用通用 auto-dark
   - 词条 HTML 中的音频链接会改写到 `data-audio-href` 非导航属性；后端会按需注入极小播放 runtime，避免跳到浏览器默认媒体页
   - HTML/CSS 重写与内容安全头
-  - sidecar suggest 索引现为 `normalized -> ordinal postings`；构建期只扫描 key，查询期再按需通过 `mdict-rs::key_at(ordinal)` 取回原词头
+  - sidecar suggest 索引现为 `normalized -> ordinal postings`；构建期只扫描 key，查询期按批量大小在 `mdict-rs::key_at` / `keys_at` 间切换取回原词头
   - admin reload / healthz / readyz / metrics
   - 可选 entry/resource cache，默认关闭
   - 单元测试、真实词典 HTTP smoke test、criterion benchmark
@@ -71,7 +71,7 @@
 ## 已知风险
 
 - `mdict-rs` 当前 `FileSource` 的 `Mutex<File>` 可能在高并发热点词典下形成竞争
-- `suggest` 现在不再为构建索引扫描正文，但热路径也不再是纯内存返回；命中 sidecar 后仍会做少量 `key_at(ordinal)` 阻塞 key-block 读取，需要继续观察高并发下的收益与竞争
+- `suggest` 现在不再为构建索引扫描正文，但热路径也不再是纯内存返回；命中 sidecar 后仍会做少量 `key_at(ordinal)` 或较大批次 `keys_at(ordinals)` 的阻塞 key-block 读取，需要继续观察高并发下的收益与竞争
 - 词条 HTML 的资源重写覆盖面必须实测，尤其是 CSS `url(...)`、相对路径、奇怪的资源 key
 - 真实词典差异很大，必须用本地语料做回归
 - `mdict-rs` 是 `AGPL-3.0-only`，许可证策略必须尽早确认
@@ -247,6 +247,17 @@
 - 这次把 sidecar 从“`normalized + canonical` composite key FST”切到“`fst::Map(normalized -> posting range)` + ordinals blob”，并改成构建期只走 `mdict-rs::keys_with_ordinals()`；首次迁移重建四本词典后，warm startup 仍约 `431 ms`
 - 本地 `index/` 总大小从旧格式约 `27.3 MB` 降到新格式约 `18.1 MB`；其中 `b` 从 `9.1 MB` 降到 `5.6 MB`，`oald10` 从 `10.6 MB` 降到 `7.0 MB`
 - 代价是 `suggest` warm path 不再是纯内存 composite key 直接回 canonical 字符串，而是命中 sidecar 后再做少量 `key_at(ordinal)`；这轮短样本里 `lookup` 小幅回归、`suggest` 明显回归、`entry_content` 改善。这个取舍是预期内的，但是否值得长期保留还需要结合真实并发与启动收益继续评估
+
+2026-04-04 为 scheme 1 suggest 接入 `mdict-rs::keys_at` 混合批量策略再次执行同一命令：
+
+- `lookup/ldoce_apple`: `930.93 µs .. 956.11 µs`
+- `lookup/ldoce_suggest_app`: `41.392 µs .. 41.954 µs`
+- `lookup/ldoce_entry_content_apple`: `7.4613 ms .. 7.6014 ms`
+
+说明：
+
+- `mdict-rs 0.1.4` 新增了按 ordinal 批量取 key 的 `keys_at(&[KeyOrdinal])`；这次把 `mdict-web` 的 scheme 1 suggest 改成“小批量继续 `key_at`，较大批次切 `keys_at`”的混合策略，避免对典型低候选数查询强行支付 batch 排序/分组开销
+- 相比上一版“无条件 batch”，这轮 `suggest` 基准有回收；但和最初只用 `key_at` 的 scheme 1 结果相比，短样本下还看不出稳定优势。当前更像是在为更大批次、更分散 block 的真实查询预留上界，而不是已经在这个单词典微基准上拿到确定收益
 
 ## 实现约束
 
