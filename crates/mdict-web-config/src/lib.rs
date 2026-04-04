@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use mdict_rs::{OpenOptions, Passcode};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use walkdir::WalkDir;
 
@@ -145,8 +145,7 @@ pub struct AdminConfig {
     pub reload_token: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DictionaryBundleManifest {
     pub dictionary_id: String,
     pub display_name: String,
@@ -169,6 +168,34 @@ pub struct DictionaryBundleManifest {
     pub passcode: Option<PasscodeConfig>,
     #[serde(default)]
     pub metadata: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawDictionaryBundleManifest {
+    dictionary_id: String,
+    display_name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    source_lang: Option<String>,
+    #[serde(default)]
+    target_lang: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    mdx_path: PathBuf,
+    #[serde(default)]
+    mdd_path: Option<PathBuf>,
+    #[serde(default)]
+    mdd_paths: Option<Vec<PathBuf>>,
+    #[serde(default)]
+    entry_script_mode: EntryScriptMode,
+    #[serde(default)]
+    theme_mode: ThemeMode,
+    #[serde(default)]
+    passcode: Option<PasscodeConfig>,
+    #[serde(default)]
+    metadata: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -248,6 +275,42 @@ impl AppConfig {
         validate_manifests(&manifests)?;
         self.catalog.bundles = manifests;
         Ok(())
+    }
+}
+
+impl<'de> Deserialize<'de> for DictionaryBundleManifest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawDictionaryBundleManifest::deserialize(deserializer)?;
+        if raw.mdd_path.is_some() && raw.mdd_paths.is_some() {
+            return Err(serde::de::Error::custom(
+                "use either `mdd_path` or `mdd_paths`, not both",
+            ));
+        }
+
+        let mdd_paths = match (raw.mdd_path, raw.mdd_paths) {
+            (Some(path), None) => vec![path],
+            (None, Some(paths)) => paths,
+            (None, None) => Vec::new(),
+            (Some(_), Some(_)) => unreachable!("handled above"),
+        };
+
+        Ok(Self {
+            dictionary_id: raw.dictionary_id,
+            display_name: raw.display_name,
+            description: raw.description,
+            source_lang: raw.source_lang,
+            target_lang: raw.target_lang,
+            tags: raw.tags,
+            mdx_path: raw.mdx_path,
+            mdd_paths,
+            entry_script_mode: raw.entry_script_mode,
+            theme_mode: raw.theme_mode,
+            passcode: raw.passcode,
+            metadata: raw.metadata,
+        })
     }
 }
 
@@ -463,8 +526,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_legacy_mdd_path_field() {
-        let error = toml::from_str::<DictionaryBundleManifest>(
+    fn normalizes_legacy_mdd_path_field() {
+        let manifest = toml::from_str::<DictionaryBundleManifest>(
             r#"
 dictionary_id = "demo"
 display_name = "Demo"
@@ -472,18 +535,39 @@ mdx_path = "demo.mdx"
 mdd_path = "demo.mdd"
 "#,
         )
-        .expect_err("legacy mdd_path must be rejected");
-        assert!(error.to_string().contains("unknown field `mdd_path`"));
+        .expect("legacy mdd_path should normalize");
+        assert_eq!(manifest.mdd_paths, vec![PathBuf::from("demo.mdd")]);
     }
 
     #[test]
-    fn app_config_resolves_relative_mdd_paths() {
+    fn rejects_mdd_path_and_mdd_paths_together() {
+        let error = toml::from_str::<DictionaryBundleManifest>(
+            r#"
+dictionary_id = "demo"
+display_name = "Demo"
+mdx_path = "demo.mdx"
+mdd_path = "demo.mdd"
+mdd_paths = ["demo.1.mdd", "demo.2.mdd"]
+"#,
+        )
+        .expect_err("mixed mdd_path and mdd_paths must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("use either `mdd_path` or `mdd_paths`, not both")
+        );
+    }
+
+    #[test]
+    fn app_config_resolves_relative_mdd_path_and_mdd_paths() {
         let dir = tempdir().expect("temp dir should exist");
         let dictionaries_dir = dir.path().join("dict");
         fs::create_dir_all(&dictionaries_dir).expect("dict dir should exist");
-        fs::write(dictionaries_dir.join("demo.mdx"), b"mdx").expect("mdx should write");
-        fs::write(dictionaries_dir.join("demo.1.mdd"), b"mdd1").expect("mdd1 should write");
-        fs::write(dictionaries_dir.join("demo.2.mdd"), b"mdd2").expect("mdd2 should write");
+        fs::write(dictionaries_dir.join("demo.mdx"), b"mdx").expect("demo mdx should write");
+        fs::write(dictionaries_dir.join("demo.mdd"), b"mdd").expect("demo mdd should write");
+        fs::write(dictionaries_dir.join("multi.mdx"), b"mdx").expect("multi mdx should write");
+        fs::write(dictionaries_dir.join("multi.1.mdd"), b"mdd1").expect("mdd1 should write");
+        fs::write(dictionaries_dir.join("multi.2.mdd"), b"mdd2").expect("mdd2 should write");
 
         let config_path = dir.path().join("mdict-web.toml");
         fs::write(
@@ -495,18 +579,27 @@ mdd_path = "demo.mdd"
 dictionary_id = "demo"
 display_name = "Demo"
 mdx_path = "dict/demo.mdx"
-mdd_paths = ["dict/demo.1.mdd", "dict/demo.2.mdd"]
+mdd_path = "dict/demo.mdd"
+
+[[catalog.bundles]]
+dictionary_id = "multi"
+display_name = "Multi"
+mdx_path = "dict/multi.mdx"
+mdd_paths = ["dict/multi.1.mdd", "dict/multi.2.mdd"]
 "#,
         )
         .expect("config should write");
 
         let config = AppConfig::load(&config_path).expect("config should load");
         let manifest = &config.catalog.bundles[0];
+        assert_eq!(manifest.mdd_paths, vec![dictionaries_dir.join("demo.mdd")]);
+
+        let manifest = &config.catalog.bundles[1];
         assert_eq!(
             manifest.mdd_paths,
             vec![
-                dictionaries_dir.join("demo.1.mdd"),
-                dictionaries_dir.join("demo.2.mdd"),
+                dictionaries_dir.join("multi.1.mdd"),
+                dictionaries_dir.join("multi.2.mdd"),
             ]
         );
     }

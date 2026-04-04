@@ -145,7 +145,7 @@ mdict-web/
 - `dictionary_id`
 - 显示名、语言、标签
 - `mdx_path`
-- 可选 `mdd_paths` 有序列表
+- 配置层可写 `mdd_path` 或 `mdd_paths`；内部统一归一化为有序 `mdd_paths`
 - `entry_script_mode = none | original`，默认 `none`
 - `theme_mode = auto | dictionary | force_auto_dark`，默认 `auto`
 - 可选 passcode
@@ -466,7 +466,7 @@ API 合同以 `docs/API_CONTRACT.md` 为准。
 截至 2026-04-03，仓库已落地第一版可运行实现：
 
 - Cargo workspace 已完成，crate 边界与依赖方向固定
-- 已实现 TOML 配置加载与 `DictionaryBundle` manifest；资源文件通过 `mdd_paths` 有序列表声明
+- 已实现 TOML 配置加载与 `DictionaryBundle` manifest；配置层可写 `mdd_path` 或 `mdd_paths`，内部统一为有序 `mdd_paths`
 - 已实现 catalog、词典列表、详情、healthz、readyz
 - 已实现 exact lookup、entry HTML content、resource content
 - 已实现 HTML/CSS 重写、按词典配置切换的脚本保留/移除、资源 URL 重写

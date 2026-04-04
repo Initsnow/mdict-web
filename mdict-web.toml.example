@@ -36,5 +36,5 @@ source_lang = "en"
 target_lang = "en"
 tags = ["demo"]
 mdx_path = "/absolute/path/to/demo.mdx"
-mdd_paths = ["/absolute/path/to/demo.mdd"]
+mdd_path = "/absolute/path/to/demo.mdd"
 entry_script_mode = "none"

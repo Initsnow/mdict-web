@@ -72,11 +72,9 @@ fn local_fixture_paths() -> Option<(PathBuf, Vec<PathBuf>)> {
 }
 
 fn write_config(dir: &Path, mdx_path: &Path, mdd_paths: &[PathBuf]) -> PathBuf {
-    let mdd_paths = mdd_paths
-        .iter()
-        .map(|path| format!(r#""{}""#, path.display()))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let mdd_path = mdd_paths
+        .first()
+        .expect("benchmark fixture config expects a single mdd path");
     let config = format!(
         r#"
 [server]
@@ -91,11 +89,11 @@ dir = "{}"
 dictionary_id = "ldoce5pp"
 display_name = "LDOCE5++"
 mdx_path = "{}"
-mdd_paths = [{}]
+mdd_path = "{}"
 "#,
         dir.join("index").display(),
         mdx_path.display(),
-        mdd_paths
+        mdd_path.display()
     );
     let path = dir.join("mdict-web.toml");
     fs::write(&path, config).expect("benchmark config should be written");
