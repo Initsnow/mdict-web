@@ -250,6 +250,10 @@ async fn local_fixture_http_smoke_test() {
         content_text.contains("/api/v1/dictionaries/ldoce5pp/resources/content?key="),
         "{content_text}"
     );
+    assert!(
+        content_text.contains("/api/v1/dictionaries/ldoce5pp/entries/content?key=apple%20polisher"),
+        "{content_text}"
+    );
     assert!(content_text.contains("data-audio-href="), "{content_text}");
     assert!(content_text.contains("<script>"), "{content_text}");
     assert!(

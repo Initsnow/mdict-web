@@ -385,6 +385,7 @@
 - 已重写的词条 HTML；若 `key` 命中的是 `@@@LINK=` alias，则直接返回最终目标词条的 HTML
 - 词典自带脚本会被移除；只有当词条里出现 `data-audio-href` 音频链接时，后端才会注入自有的极小运行时在 iframe 内处理它
 - 词条中的音频资源链接会重写为非导航属性 `data-audio-href`，由该运行时在 iframe 内原位播放，避免 iframe 自身跳到媒体 URL
+- 词条中的 `entry://{target}` 链接会重写为同词典的 `entries/content?key={target}`，若原链接带 `#fragment` 则一并保留
 
 前端约定：
 

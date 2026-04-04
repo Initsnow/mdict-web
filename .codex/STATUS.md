@@ -20,6 +20,7 @@
   - 全局多词典 aggregate suggest / lookup
   - exact lookup / suggest / entry content / resource content
   - MDX `@@@LINK=` alias 解析与最终词条跳转
+  - 词条 HTML 中的 `entry://...` 交叉引用会重写到同词典 `entries/content`，不再误走资源接口
   - `sound://...` 音频资源 key 到实际 MDD 路径的服务端归一化
   - 词条 HTML 中的音频链接会被后端重写为 `data-audio-href`；仅在词条真的包含音频链接时才注入自有 iframe 运行时，在词条页内部原位播放，不再导航到默认浏览器播放器
   - HTML/CSS 重写与内容安全头
@@ -107,6 +108,17 @@
 
 - 这次修复把词条 HTML 中的音频链接从可导航 `href` 改写为 `data-audio-href`，并仅在需要时在词条页里注入自有音频运行时；同时提升了 `ENTRY_RENDER_VERSION`，避免浏览器继续复用旧缓存正文
 - `entry_content` 短样本下出现了更明显的统计显著回归；如果要判断这次运行时注入与额外 HTML 重写逻辑的真实成本，需要放大样本后再看
+
+2026-04-04 为 `entry://...` 交叉引用重写到 `entries/content` 再次执行同一命令：
+
+- `lookup/ldoce_apple`: `956.18 µs .. 972.72 µs`
+- `lookup/ldoce_suggest_app`: `10.451 µs .. 10.556 µs`
+- `lookup/ldoce_entry_content_apple`: `7.2441 ms .. 7.7138 ms`
+
+说明：
+
+- 这次修复把词条 HTML 里的 `entry://...` 链接从错误的资源接口改写为同词典 `entries/content`
+- `entry_content` 在短样本下没有统计显著变化；`suggest` 出现回归而 `lookup` 出现改善，这类短样本波动仍然偏大，暂不把这次结果直接当成稳定性能结论
 
 ## 实现约束
 

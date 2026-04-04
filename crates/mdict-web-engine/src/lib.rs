@@ -18,7 +18,7 @@ use mdict_web_index::DictionarySuggestIndex;
 use metrics::counter;
 use mime::Mime;
 use moka::sync::Cache;
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use regex::Regex;
 use tokio::sync::{Semaphore, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
@@ -808,6 +808,10 @@ fn rewrite_url_value(dictionary_id: &str, attribute: &str, raw: &str) -> Option<
         return Some(value.to_owned());
     }
 
+    if attribute == "href" && value.starts_with("entry://") {
+        return entry_content_href(dictionary_id, value);
+    }
+
     if is_dangerous_scheme(value) {
         return None;
     }
@@ -863,6 +867,27 @@ fn resource_content_url(dictionary_id: &str, resource_key: &str) -> String {
         "/api/v1/dictionaries/{dictionary_id}/resources/content?key={}",
         utf8_percent_encode(resource_key, NON_ALPHANUMERIC)
     )
+}
+
+fn entry_content_href(dictionary_id: &str, raw: &str) -> Option<String> {
+    let target = raw.strip_prefix("entry://")?;
+    let (entry_key_raw, fragment) = match target.split_once('#') {
+        Some((entry_key, fragment)) => (entry_key, Some(fragment)),
+        None => (target, None),
+    };
+    if entry_key_raw.is_empty() {
+        return None;
+    }
+    let entry_key = percent_decode_str(entry_key_raw).decode_utf8_lossy();
+    let mut href = format!(
+        "/api/v1/dictionaries/{dictionary_id}/entries/content?key={}",
+        utf8_percent_encode(entry_key.as_ref(), NON_ALPHANUMERIC)
+    );
+    if let Some(fragment) = fragment.filter(|fragment| !fragment.is_empty()) {
+        href.push('#');
+        href.push_str(fragment);
+    }
+    Some(href)
 }
 
 fn is_audio_href(raw: &str, rewritten: &str) -> bool {
@@ -1077,6 +1102,27 @@ mod tests {
         let rewritten =
             rewrite_entry_html("demo", "<p>plain text</p>").expect("entry html should rewrite");
         assert!(!rewritten.contains(ENTRY_RUNTIME_SCRIPT), "{rewritten}");
+    }
+
+    #[test]
+    fn rewrite_entry_html_maps_entry_links_to_entry_content() {
+        let rewritten = rewrite_entry_html(
+            "demo",
+            r#"<a class="crossRef" href="entry://building%20block#building-block__1__a">building block</a>"#,
+        )
+        .expect("entry html should rewrite");
+        assert!(
+            rewritten.contains(
+                r#"href="/api/v1/dictionaries/demo/entries/content?key=building%20block#building-block__1__a""#
+            ),
+            "{rewritten}"
+        );
+        assert!(
+            !rewritten.contains(
+                r#"href="/api/v1/dictionaries/demo/resources/content?key=entry%3A%2F%2Fbuilding%2520block"#
+            ),
+            "{rewritten}"
+        );
     }
 
     #[test]
