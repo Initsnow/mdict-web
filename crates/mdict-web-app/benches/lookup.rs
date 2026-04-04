@@ -6,12 +6,12 @@ use mdict_web_service::ReloadableDictionaryService;
 use tempfile::tempdir;
 
 fn lookup_benchmark(criterion: &mut Criterion) {
-    let Some((mdx_path, mdd_path)) = local_fixture_paths() else {
+    let Some((mdx_path, mdd_paths)) = local_fixture_paths() else {
         return;
     };
 
     let temp_dir = tempdir().expect("temp dir should be created");
-    let config_path = write_config(temp_dir.path(), &mdx_path, &mdd_path);
+    let config_path = write_config(temp_dir.path(), &mdx_path, &mdd_paths);
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should start");
     let service = runtime
         .block_on(ReloadableDictionaryService::load_from_path(&config_path))
@@ -46,7 +46,7 @@ fn lookup_benchmark(criterion: &mut Criterion) {
     group.finish();
 }
 
-fn local_fixture_paths() -> Option<(PathBuf, PathBuf)> {
+fn local_fixture_paths() -> Option<(PathBuf, Vec<PathBuf>)> {
     let candidates = [
         (
             PathBuf::from(
@@ -64,14 +64,19 @@ fn local_fixture_paths() -> Option<(PathBuf, PathBuf)> {
 
     for (mdx, mdd) in candidates {
         if mdx.exists() && mdd.exists() {
-            return Some((mdx, mdd));
+            return Some((mdx, vec![mdd]));
         }
     }
 
     None
 }
 
-fn write_config(dir: &Path, mdx_path: &Path, mdd_path: &Path) -> PathBuf {
+fn write_config(dir: &Path, mdx_path: &Path, mdd_paths: &[PathBuf]) -> PathBuf {
+    let mdd_paths = mdd_paths
+        .iter()
+        .map(|path| format!(r#""{}""#, path.display()))
+        .collect::<Vec<_>>()
+        .join(", ");
     let config = format!(
         r#"
 [server]
@@ -86,11 +91,11 @@ dir = "{}"
 dictionary_id = "ldoce5pp"
 display_name = "LDOCE5++"
 mdx_path = "{}"
-mdd_path = "{}"
+mdd_paths = [{}]
 "#,
         dir.join("index").display(),
         mdx_path.display(),
-        mdd_path.display()
+        mdd_paths
     );
     let path = dir.join("mdict-web.toml");
     fs::write(&path, config).expect("benchmark config should be written");

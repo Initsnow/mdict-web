@@ -146,6 +146,7 @@ pub struct AdminConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DictionaryBundleManifest {
     pub dictionary_id: String,
     pub display_name: String,
@@ -159,7 +160,7 @@ pub struct DictionaryBundleManifest {
     pub tags: Vec<String>,
     pub mdx_path: PathBuf,
     #[serde(default)]
-    pub mdd_path: Option<PathBuf>,
+    pub mdd_paths: Vec<PathBuf>,
     #[serde(default)]
     pub entry_script_mode: EntryScriptMode,
     #[serde(default)]
@@ -241,7 +242,7 @@ impl AppConfig {
 
 impl DictionaryBundleManifest {
     pub fn has_resources(&self) -> bool {
-        self.mdd_path.is_some()
+        !self.mdd_paths.is_empty()
     }
 
     pub fn allows_dictionary_scripts(&self) -> bool {
@@ -273,10 +274,11 @@ fn resolve_manifest(
     mut manifest: DictionaryBundleManifest,
 ) -> DictionaryBundleManifest {
     manifest.mdx_path = absolutize(base_dir, &manifest.mdx_path);
-    manifest.mdd_path = manifest
-        .mdd_path
-        .take()
-        .map(|path| absolutize(base_dir, &path));
+    manifest.mdd_paths = manifest
+        .mdd_paths
+        .into_iter()
+        .map(|path| absolutize(base_dir, &path))
+        .collect();
     manifest.tags.sort();
     manifest.tags.dedup();
     manifest
@@ -328,10 +330,18 @@ fn validate_manifests(manifests: &[DictionaryBundleManifest]) -> Result<(), Conf
                 manifest.mdx_path.display()
             )));
         }
-        if let Some(path) = &manifest.mdd_path {
+        let mut seen_mdd_paths = BTreeSet::new();
+        for path in &manifest.mdd_paths {
             if !path.exists() {
                 return Err(ConfigError::Invalid(format!(
                     "mdd file does not exist for `{}`: {}",
+                    manifest.dictionary_id,
+                    path.display()
+                )));
+            }
+            if !seen_mdd_paths.insert(path.clone()) {
+                return Err(ConfigError::Invalid(format!(
+                    "duplicate mdd path configured for `{}`: {}",
                     manifest.dictionary_id,
                     path.display()
                 )));
@@ -402,6 +412,7 @@ fn default_metrics_path() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn rejects_duplicate_dictionary_ids() {
@@ -414,7 +425,7 @@ mod tests {
                 target_lang: None,
                 tags: vec![],
                 mdx_path: PathBuf::from("/tmp/demo.mdx"),
-                mdd_path: None,
+                mdd_paths: vec![],
                 entry_script_mode: EntryScriptMode::None,
                 passcode: None,
                 metadata: BTreeMap::new(),
@@ -427,7 +438,7 @@ mod tests {
                 target_lang: None,
                 tags: vec![],
                 mdx_path: PathBuf::from("/tmp/demo-2.mdx"),
-                mdd_path: None,
+                mdd_paths: vec![],
                 entry_script_mode: EntryScriptMode::None,
                 passcode: None,
                 metadata: BTreeMap::new(),
@@ -436,5 +447,79 @@ mod tests {
 
         let error = validate_manifests(&manifests).expect_err("duplicate ids must fail");
         assert!(error.to_string().contains("duplicate dictionary_id"));
+    }
+
+    #[test]
+    fn rejects_legacy_mdd_path_field() {
+        let error = toml::from_str::<DictionaryBundleManifest>(
+            r#"
+dictionary_id = "demo"
+display_name = "Demo"
+mdx_path = "demo.mdx"
+mdd_path = "demo.mdd"
+"#,
+        )
+        .expect_err("legacy mdd_path must be rejected");
+        assert!(error.to_string().contains("unknown field `mdd_path`"));
+    }
+
+    #[test]
+    fn app_config_resolves_relative_mdd_paths() {
+        let dir = tempdir().expect("temp dir should exist");
+        let dictionaries_dir = dir.path().join("dict");
+        fs::create_dir_all(&dictionaries_dir).expect("dict dir should exist");
+        fs::write(dictionaries_dir.join("demo.mdx"), b"mdx").expect("mdx should write");
+        fs::write(dictionaries_dir.join("demo.1.mdd"), b"mdd1").expect("mdd1 should write");
+        fs::write(dictionaries_dir.join("demo.2.mdd"), b"mdd2").expect("mdd2 should write");
+
+        let config_path = dir.path().join("mdict-web.toml");
+        fs::write(
+            &config_path,
+            r#"
+[catalog]
+
+[[catalog.bundles]]
+dictionary_id = "demo"
+display_name = "Demo"
+mdx_path = "dict/demo.mdx"
+mdd_paths = ["dict/demo.1.mdd", "dict/demo.2.mdd"]
+"#,
+        )
+        .expect("config should write");
+
+        let config = AppConfig::load(&config_path).expect("config should load");
+        let manifest = &config.catalog.bundles[0];
+        assert_eq!(
+            manifest.mdd_paths,
+            vec![
+                dictionaries_dir.join("demo.1.mdd"),
+                dictionaries_dir.join("demo.2.mdd"),
+            ]
+        );
+    }
+
+    #[test]
+    fn validate_manifests_rejects_duplicate_mdd_paths() {
+        let dir = tempdir().expect("temp dir should exist");
+        let mdx_path = dir.path().join("demo.mdx");
+        let mdd_path = dir.path().join("demo-a.mdd");
+        fs::write(&mdx_path, b"mdx").expect("mdx should write");
+        fs::write(&mdd_path, b"mdd").expect("mdd should write");
+        let manifests = vec![DictionaryBundleManifest {
+            dictionary_id: "demo".to_owned(),
+            display_name: "Demo".to_owned(),
+            description: None,
+            source_lang: None,
+            target_lang: None,
+            tags: vec![],
+            mdx_path,
+            mdd_paths: vec![mdd_path.clone(), mdd_path],
+            entry_script_mode: EntryScriptMode::None,
+            passcode: None,
+            metadata: BTreeMap::new(),
+        }];
+
+        let error = validate_manifests(&manifests).expect_err("duplicate mdd paths must fail");
+        assert!(error.to_string().contains("duplicate mdd path configured"));
     }
 }

@@ -38,6 +38,7 @@ Build a high-performance, safe, API-first Rust MDict web server on top of `mdict
 - Prefer upstreamable improvements to `mdict-rs` over server-local parser hacks.
 - Respect `mdict-rs` licensing constraints: it is `AGPL-3.0-only` unless a separate commercial license is in place.
 - Do not add `unsafe` without a measured need, tight isolation, and doc updates.
+- `DictionaryBundle` manifest 里的资源配置只允许 `mdd_paths = []`；不要重新引入单值 `mdd_path` 或任何兼容旧字段的解析分支。
 
 ## Documentation Sync Rule
 

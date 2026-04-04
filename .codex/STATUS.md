@@ -19,6 +19,7 @@
   - 词典 catalog / list / detail
   - 全局多词典 aggregate suggest / lookup
   - exact lookup / suggest / entry content / resource content
+  - `DictionaryBundle` 的资源文件通过 `mdd_paths` 有序列表声明，资源查找会按列表顺序依次命中；不再支持旧的单值 `mdd_path`
   - MDX `@@@LINK=` alias 解析与最终词条跳转
   - 词条 HTML 中的 `entry://...` 交叉引用会重写到同词典 `entries/content`，不再误走资源接口
   - `sound://...` 音频资源 key 到实际 MDD 路径的服务端归一化
@@ -180,6 +181,17 @@
 
 - 这次把资源优先级从“`MDD` 优先、sidecar 仅兜底”调整为“同名 `.css` / `.js` sidecar 优先于 `MDD`”，用来兼容 LDOCE5++ 这类本地 companion 样式覆盖包内旧样式的场景
 - 短样本下 `lookup` 变化落在噪声阈值内、`suggest` 无显著变化、`entry_content` 出现改善；由于改动集中在资源访问层，这轮结果仍不应被过度解读为稳定的整体性能提升
+
+2026-04-04 为 `mdd_paths` 多资源包顺序查找再次执行同一命令：
+
+- `lookup/ldoce_apple`: `948.74 µs .. 1.0404 ms`
+- `lookup/ldoce_suggest_app`: `8.8105 µs .. 8.8922 µs`
+- `lookup/ldoce_entry_content_apple`: `5.6402 ms .. 6.4080 ms`
+
+说明：
+
+- 这次把 `DictionaryBundle` 的资源声明从单值 `mdd_path` 切成只接受 `mdd_paths` 有序列表，engine 会按配置顺序依次查询多个 `MDD`
+- 短样本下 `lookup` 落在噪声阈值内、`suggest` 无显著变化、`entry_content` 出现回归；因为这次改动不在正文渲染主路径上，这个回归更可能来自短 measurement window 波动，后续如果要下结论需要放大样本再看
 
 2026-04-04 为手机端显示优化布局：
 

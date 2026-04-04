@@ -9,13 +9,13 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn local_fixture_http_smoke_test() {
-    let Some((mdx_path, mdd_path)) = local_fixture_paths() else {
+    let Some((mdx_path, mdd_paths)) = local_fixture_paths() else {
         return;
     };
 
     let fixture_dir = reusable_fixture_dir();
     fs::create_dir_all(&fixture_dir).expect("fixture dir should be created");
-    let config_path = write_config(&fixture_dir, &mdx_path, &mdd_path);
+    let config_path = write_config(&fixture_dir, &mdx_path, &mdd_paths);
     let frontend_dist = write_frontend_dist(&fixture_dir);
     let service = ReloadableDictionaryService::load_from_path(&config_path)
         .await
@@ -441,7 +441,7 @@ async fn local_fixture_http_smoke_test() {
     assert_eq!(reload_ok.status(), StatusCode::OK);
 }
 
-fn local_fixture_paths() -> Option<(PathBuf, PathBuf)> {
+fn local_fixture_paths() -> Option<(PathBuf, Vec<PathBuf>)> {
     let candidates = [
         (
             PathBuf::from(
@@ -459,7 +459,7 @@ fn local_fixture_paths() -> Option<(PathBuf, PathBuf)> {
 
     for (mdx, mdd) in candidates {
         if mdx.exists() && mdd.exists() {
-            return Some((mdx, mdd));
+            return Some((mdx, vec![mdd]));
         }
     }
 
@@ -470,7 +470,12 @@ fn reusable_fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/local-fixtures/http-smoke")
 }
 
-fn write_config(dir: &Path, mdx_path: &Path, mdd_path: &Path) -> PathBuf {
+fn write_config(dir: &Path, mdx_path: &Path, mdd_paths: &[PathBuf]) -> PathBuf {
+    let mdd_paths = mdd_paths
+        .iter()
+        .map(|path| format!(r#""{}""#, path.display()))
+        .collect::<Vec<_>>()
+        .join(", ");
     let config = format!(
         r#"
 [server]
@@ -490,21 +495,21 @@ reload_token = "integration-test-token"
 dictionary_id = "ldoce5pp"
 display_name = "LDOCE5++"
 mdx_path = "{}"
-mdd_path = "{}"
+mdd_paths = [{}]
 entry_script_mode = "none"
 
 [[catalog.bundles]]
 dictionary_id = "ldoce5pp_alt"
 display_name = "LDOCE5++ Alt"
 mdx_path = "{}"
-mdd_path = "{}"
+mdd_paths = [{}]
 entry_script_mode = "original"
 "#,
         dir.join("index").display(),
         mdx_path.display(),
-        mdd_path.display(),
+        mdd_paths,
         mdx_path.display(),
-        mdd_path.display()
+        mdd_paths
     );
     let path = dir.join("mdict-web.toml");
     fs::write(&path, config).expect("config file should be written");

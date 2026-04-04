@@ -73,7 +73,7 @@ pub struct LoadedDictionary {
     pub header: Header,
     pub entry_count: u64,
     pub mdx: Arc<MdxFile>,
-    pub mdd: Option<Arc<MddFile>>,
+    pub mdds: Vec<Arc<MddFile>>,
     pub index: DictionarySuggestIndex,
     pub version_tag: String,
 }
@@ -125,6 +125,12 @@ struct ResolvedMdxRecord {
 struct ResolvedSidecarResource {
     resolved_key: String,
     path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedMddResourceSpan {
+    mdd: Arc<MddFile>,
+    span: MddResourceSpan,
 }
 
 impl LoadedDictionary {
@@ -183,16 +189,17 @@ impl DictionaryEngine {
             config.index.rebuild_on_startup,
             &mdx,
         )?;
-        let mdd = manifest
-            .mdd_path
-            .as_ref()
-            .map(|path| MddFile::open_with_options(path, manifest.open_options()))
-            .transpose()?;
-        let version_tag = dictionary_version_tag(&manifest.mdx_path, manifest.mdd_path.as_deref())?;
+        let mdds = manifest
+            .mdd_paths
+            .iter()
+            .map(|path| MddFile::open_with_options(path, manifest.open_options()).map(Arc::new))
+            .collect::<Result<Vec<_>, _>>()?;
+        let version_tag = dictionary_version_tag(&manifest.mdx_path, &manifest.mdd_paths)?;
 
         info!(
             dictionary_id = %manifest.dictionary_id,
             entry_count,
+            mdd_count = mdds.len(),
             has_resources = manifest.has_resources(),
             "loaded dictionary bundle"
         );
@@ -202,7 +209,7 @@ impl DictionaryEngine {
             header,
             entry_count,
             mdx: Arc::new(mdx),
-            mdd: mdd.map(Arc::new),
+            mdds,
             index,
             version_tag,
         })
@@ -256,7 +263,7 @@ impl DictionaryEngine {
                 &record.record.key,
                 entry_render_version(dictionary.manifest.entry_script_mode),
             ),
-            has_resources: dictionary.mdd.is_some(),
+            has_resources: !dictionary.mdds.is_empty(),
         })
     }
 
@@ -316,13 +323,16 @@ impl DictionaryEngine {
                 .await;
         }
 
-        if let Some(mdd) = dictionary.mdd.clone() {
+        if !dictionary.mdds.is_empty() {
             match self
-                .lookup_resource_span(mdd.clone(), &dictionary_id, query_key.clone())
+                .lookup_resource_span(dictionary.mdds.clone(), &dictionary_id, query_key.clone())
                 .await
             {
-                Ok(span) => {
-                    let cache_key = format!("{}:{}", dictionary.manifest.dictionary_id, span.key);
+                Ok(resolved) => {
+                    let cache_key = format!(
+                        "{}:{}",
+                        dictionary.manifest.dictionary_id, resolved.span.key
+                    );
                     if let Some(cache) = &self.resource_cache {
                         if let Some(cached) = cache.get(&cache_key) {
                             counter!("mdict_web_resource_cache_hits_total").increment(1);
@@ -331,18 +341,18 @@ impl DictionaryEngine {
                         counter!("mdict_web_resource_cache_misses_total").increment(1);
                     }
 
-                    let content_type = guess_content_type(&span.key);
+                    let content_type = guess_content_type(&resolved.span.key);
                     if should_materialize_resource(
                         &content_type,
-                        span.len(),
+                        resolved.span.len(),
                         self.resource_cache_item_limit,
                     ) {
                         let payload = self
                             .load_buffered_resource(
-                                mdd,
+                                resolved.mdd,
                                 &dictionary.manifest.dictionary_id,
                                 &dictionary.version_tag,
-                                span,
+                                resolved.span,
                                 content_type,
                             )
                             .await?;
@@ -365,10 +375,10 @@ impl DictionaryEngine {
 
                     return self
                         .stream_resource(
-                            mdd,
+                            resolved.mdd,
                             &dictionary.manifest.dictionary_id,
                             &dictionary.version_tag,
-                            span,
+                            resolved.span,
                             content_type,
                         )
                         .await;
@@ -479,22 +489,29 @@ impl DictionaryEngine {
 
     async fn lookup_resource_span(
         &self,
-        mdd: Arc<MddFile>,
+        mdds: Vec<Arc<MddFile>>,
         dictionary_id: &str,
         query_key: String,
-    ) -> Result<MddResourceSpan, ServiceError> {
+    ) -> Result<ResolvedMddResourceSpan, ServiceError> {
         let dictionary_id = dictionary_id.to_owned();
         self.run_blocking("resource_lookup", move || {
             let candidates = resource_key_candidates(&query_key);
-            for candidate in candidates {
-                match mdd.lookup_span(&candidate) {
-                    Ok(Some(span)) => return Ok(span),
-                    Ok(None) => continue,
-                    Err(error) => {
-                        return Err(ServiceError::dictionary_unavailable(
-                            &dictionary_id,
-                            error.to_string(),
-                        ));
+            for mdd in mdds {
+                for candidate in &candidates {
+                    match mdd.lookup_span(candidate) {
+                        Ok(Some(span)) => {
+                            return Ok(ResolvedMddResourceSpan {
+                                mdd: mdd.clone(),
+                                span,
+                            });
+                        }
+                        Ok(None) => continue,
+                        Err(error) => {
+                            return Err(ServiceError::dictionary_unavailable(
+                                &dictionary_id,
+                                error.to_string(),
+                            ));
+                        }
                     }
                 }
             }
@@ -647,7 +664,7 @@ fn should_materialize_resource(
 
 fn dictionary_version_tag(
     mdx_path: &Path,
-    mdd_path: Option<&Path>,
+    mdd_paths: &[PathBuf],
 ) -> Result<String, std::io::Error> {
     let mdx_meta = fs::metadata(mdx_path)?;
     let mdx_modified = mdx_meta
@@ -659,7 +676,7 @@ fn dictionary_version_tag(
 
     let mut version = format!("mdx:{}:{mdx_modified}", mdx_meta.len());
 
-    if let Some(path) = mdd_path {
+    for (index, path) in mdd_paths.iter().enumerate() {
         let metadata = fs::metadata(path)?;
         let modified = metadata
             .modified()
@@ -667,7 +684,7 @@ fn dictionary_version_tag(
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
-        version.push_str(&format!(":mdd:{}:{modified}", metadata.len()));
+        version.push_str(&format!(":mdd{index}:{}:{modified}", metadata.len()));
     }
 
     Ok(version)
@@ -1354,6 +1371,24 @@ mod tests {
 
         assert!(resolve_sidecar_resource(&mdx_path, "image.png").is_none());
         assert!(resolve_sidecar_resource(&mdx_path, "../lm6.css").is_none());
+    }
+
+    #[test]
+    fn dictionary_version_tag_depends_on_ordered_mdd_paths() {
+        let dir = tempdir().expect("temp dir should exist");
+        let mdx_path = dir.path().join("demo.mdx");
+        let first_mdd = dir.path().join("demo.1.mdd");
+        let second_mdd = dir.path().join("demo.2.mdd");
+        fs::write(&mdx_path, b"mdx").expect("mdx should write");
+        fs::write(&first_mdd, b"first").expect("first mdd should write");
+        fs::write(&second_mdd, b"second second").expect("second mdd should write");
+
+        let ordered = dictionary_version_tag(&mdx_path, &[first_mdd.clone(), second_mdd.clone()])
+            .expect("version tag should build");
+        let reversed = dictionary_version_tag(&mdx_path, &[second_mdd, first_mdd])
+            .expect("version tag should build");
+
+        assert_ne!(ordered, reversed);
     }
 
     #[test]
