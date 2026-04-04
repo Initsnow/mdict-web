@@ -10,7 +10,7 @@ use mdict_web_domain::{
 };
 use mdict_web_engine::{DictionaryEngine, LoadedDictionary};
 use thiserror::Error;
-use tokio::sync::RwLock;
+use tokio::{sync::RwLock, task::JoinSet};
 use tracing::warn;
 
 const DEFAULT_SUGGEST_LIMIT: usize = 20;
@@ -192,25 +192,40 @@ impl DictionaryService {
             .unwrap_or(DEFAULT_SUGGEST_LIMIT)
             .min(MAX_SUGGEST_LIMIT);
         let dictionaries = self.selected_dictionaries(&dictionary_ids)?;
-        let mut groups = Vec::new();
-        for dictionary in dictionaries {
+        let mut tasks = JoinSet::new();
+        for (index, dictionary) in dictionaries.into_iter().enumerate() {
+            let engine = self.engine.clone();
             let dictionary_id = dictionary.manifest.dictionary_id.clone();
-            let items = self.engine.suggest(dictionary, &query, limit).await?;
-            if items.is_empty() {
-                continue;
-            }
-            groups.push(
-                items
-                    .into_iter()
-                    .map(|item| SearchSuggestionItem {
-                        dictionary_id: dictionary_id.clone(),
-                        key: item.key,
-                        label: item.label,
-                        match_type: item.match_type,
-                    })
-                    .collect::<VecDeque<_>>(),
-            );
+            let query = query.clone();
+            tasks.spawn(async move {
+                let items = engine.suggest(dictionary, &query, limit).await?;
+                let items = if items.is_empty() {
+                    None
+                } else {
+                    Some(
+                        items
+                            .into_iter()
+                            .map(|item| SearchSuggestionItem {
+                                dictionary_id: dictionary_id.clone(),
+                                key: item.key,
+                                label: item.label,
+                                match_type: item.match_type,
+                            })
+                            .collect::<VecDeque<_>>(),
+                    )
+                };
+                Ok::<_, ServiceError>((index, items))
+            });
         }
+
+        let mut groups = (0..tasks.len()).map(|_| None).collect::<Vec<_>>();
+        while let Some(joined) = tasks.join_next().await {
+            let (index, items) = joined.map_err(|error| {
+                ServiceError::internal(format!("search suggest task failed: {error}"))
+            })??;
+            groups[index] = items;
+        }
+        let mut groups = groups.into_iter().flatten().collect::<Vec<_>>();
 
         let mut items = Vec::with_capacity(limit);
         while items.len() < limit {
@@ -261,26 +276,43 @@ impl DictionaryService {
     ) -> Result<SearchLookupResponse, ServiceError> {
         validate_query("key", &key, self.config.server.query_length_limit)?;
         let dictionaries = self.selected_dictionaries(&dictionary_ids)?;
-        let mut items = Vec::new();
-
-        for dictionary in dictionaries {
+        let mut tasks = JoinSet::new();
+        for (index, dictionary) in dictionaries.into_iter().enumerate() {
+            let engine = self.engine.clone();
             let dictionary_id = dictionary.manifest.dictionary_id.clone();
-            match self.engine.lookup(dictionary, key.clone()).await {
-                Ok(artifact) => items.push(LookupResult {
-                    dictionary_id: dictionary_id.clone(),
-                    query_key: key.clone(),
-                    resolved_key: artifact.resolved_key.clone(),
-                    redirected_from: artifact.redirected_from.clone(),
-                    match_type: artifact.match_type,
-                    has_resources: artifact.has_resources,
-                    content_url: entry_content_url(&dictionary_id, &artifact.resolved_key),
-                    resource_url_template: resource_template_url(&dictionary_id),
-                    etag: artifact.etag,
-                }),
-                Err(error) if error.code == mdict_web_domain::ErrorCode::EntryNotFound => {}
-                Err(error) => return Err(error),
-            }
+            let query_key = key.clone();
+            tasks.spawn(async move {
+                match engine.lookup(dictionary, query_key.clone()).await {
+                    Ok(artifact) => Ok::<_, ServiceError>((
+                        index,
+                        Some(LookupResult {
+                            dictionary_id: dictionary_id.clone(),
+                            query_key: query_key.clone(),
+                            resolved_key: artifact.resolved_key.clone(),
+                            redirected_from: artifact.redirected_from.clone(),
+                            match_type: artifact.match_type,
+                            has_resources: artifact.has_resources,
+                            content_url: entry_content_url(&dictionary_id, &artifact.resolved_key),
+                            resource_url_template: resource_template_url(&dictionary_id),
+                            etag: artifact.etag,
+                        }),
+                    )),
+                    Err(error) if error.code == mdict_web_domain::ErrorCode::EntryNotFound => {
+                        Ok((index, None))
+                    }
+                    Err(error) => Err(error),
+                }
+            });
         }
+
+        let mut ordered = (0..tasks.len()).map(|_| None).collect::<Vec<_>>();
+        while let Some(joined) = tasks.join_next().await {
+            let (index, item) = joined.map_err(|error| {
+                ServiceError::internal(format!("search lookup task failed: {error}"))
+            })??;
+            ordered[index] = item;
+        }
+        let items = ordered.into_iter().flatten().collect::<Vec<_>>();
 
         if items.is_empty() {
             return Err(ServiceError::entry_not_found_in_scope(&key));

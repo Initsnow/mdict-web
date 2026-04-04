@@ -18,7 +18,7 @@
 - 后端已具备：
   - TOML 配置与 `DictionaryBundle` manifest
   - 词典 catalog / list / detail
-  - 全局多词典 aggregate suggest / lookup
+  - 全局多词典 aggregate suggest / lookup；service 层会按词典并发 fan-out，再按原词典顺序组装结果
   - exact lookup / suggest / entry content / resource content
   - `DictionaryBundle` 在程序内部统一使用 `mdd_paths` 有序列表；配置层允许单值 `mdd_path`，解析后会立刻归一化为 `mdd_paths`
   - `DictionaryBundle` manifest 现支持省略 `display_name`，后端会回退到 `dictionary_id`；`description` / `source_lang` / `target_lang` 若省略或为空白字符串，则会在 API 中省略，前端不再显示占位空信息；`tags` 字段已从 manifest 与词典列表/详情 API 移除
@@ -258,6 +258,17 @@
 
 - `mdict-rs 0.1.4` 新增了按 ordinal 批量取 key 的 `keys_at(&[KeyOrdinal])`；这次把 `mdict-web` 的 scheme 1 suggest 改成“小批量继续 `key_at`，较大批次切 `keys_at`”的混合策略，避免对典型低候选数查询强行支付 batch 排序/分组开销
 - 相比上一版“无条件 batch”，这轮 `suggest` 基准有回收；但和最初只用 `key_at` 的 scheme 1 结果相比，短样本下还看不出稳定优势。当前更像是在为更大批次、更分散 block 的真实查询预留上界，而不是已经在这个单词典微基准上拿到确定收益
+
+2026-04-04 为全局 `search_suggest` / `search_lookup` 并发 fan-out 再次执行同一命令：
+
+- `lookup/ldoce_apple`: `980.50 µs .. 1.0061 ms`
+- `lookup/ldoce_suggest_app`: `40.832 µs .. 42.087 µs`
+- `lookup/ldoce_entry_content_apple`: `6.9368 ms .. 7.2053 ms`
+
+说明：
+
+- 这次把 service 层的多词典搜索从“按词典串行 await”改成“按词典并发 fan-out，再按原词典顺序组装结果”；单词典基准本身不直接覆盖这条路径，所以这轮命令主要用来做回归校验而不是直接证明并发收益
+- 现有单词典短样本里 `suggest` 没有统计显著变化；真实收益应体现在多词典聚合请求的 wall-clock latency，而不是这条 bench 的单词典热路径
 
 ## 实现约束
 
