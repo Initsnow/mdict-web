@@ -71,7 +71,7 @@ function SearchResultList({
       <p className="mb-2 px-3 text-xs font-medium text-muted-foreground">
         {results.length} {results.length === 1 ? "result" : "results"}
       </p>
-      <ScrollArea className="h-[40rem]">
+      <ScrollArea className="h-auto max-h-[15rem] lg:h-[40rem]">
         <nav className="space-y-0.5">
           {results.map((result) => {
             const key = lookupResultKey(result);
@@ -222,13 +222,13 @@ export function HomePage() {
         <header
           className={cn(
             "mx-auto flex flex-col items-center transition-all duration-300",
-            hasResults ? "pb-6 pt-8" : "pb-8 pt-16 sm:pt-24"
+            hasResults ? "pb-4 pt-6 lg:pb-6 lg:pt-8" : "pb-8 pt-16 sm:pt-24"
           )}
         >
           <div
             className={cn(
               "flex items-center gap-3 transition-all duration-300",
-              hasResults ? "mb-4" : "mb-6"
+              hasResults ? "mb-3 lg:mb-4" : "mb-6"
             )}
           >
             <img
@@ -237,13 +237,13 @@ export function HomePage() {
               aria-hidden="true"
               className={cn(
                 "shrink-0 rounded-[0.4rem] transition-all duration-300",
-                hasResults ? "h-5 w-5" : "h-7 w-7"
+                hasResults ? "h-4 w-4 lg:h-5 lg:w-5" : "h-7 w-7"
               )}
             />
             <h1
               className={cn(
                 "font-semibold tracking-tight transition-all duration-300",
-                hasResults ? "text-lg" : "text-2xl sm:text-3xl"
+                hasResults ? "text-base lg:text-lg" : "text-2xl sm:text-3xl"
               )}
             >
               MDict Web
@@ -302,7 +302,7 @@ export function HomePage() {
                   </span>
                 </h2>
               </div>
-              <EntryViewer contentUrl={activeResult.content_url} className="h-[40rem]" />
+              <EntryViewer contentUrl={activeResult.content_url} className="h-[30rem] lg:h-[40rem]" />
             </div>
           </section>
         ) : null}
