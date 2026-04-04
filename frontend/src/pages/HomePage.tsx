@@ -68,11 +68,13 @@ function SearchResultList({
 }) {
   return (
     <div className="min-w-0">
-      <p className="mb-2 px-3 text-xs font-medium text-muted-foreground">
-        {results.length} {results.length === 1 ? "result" : "results"}
-      </p>
+      <div className="flex items-center justify-between px-3 mb-2 lg:block">
+        <p className="text-xs font-medium text-muted-foreground">
+          {results.length} {results.length === 1 ? "result" : "results"}
+        </p>
+      </div>
       <ScrollArea className="h-auto max-h-[15rem] lg:h-[40rem]">
-        <nav className="space-y-0.5">
+        <nav className="flex gap-2 pb-3 lg:block lg:space-y-0.5 lg:pb-0">
           {results.map((result) => {
             const key = lookupResultKey(result);
             const isActive = key === activeResultKey;
@@ -85,19 +87,19 @@ function SearchResultList({
                 type="button"
                 onClick={() => onSelect(result)}
                 className={cn(
-                  "flex w-full flex-col gap-0.5 rounded-lg px-3 py-2.5 text-left transition-colors",
+                  "flex w-[12rem] lg:w-full shrink-0 flex-col gap-0.5 rounded-lg border border-transparent px-3 py-2 text-left transition-all lg:border-none lg:py-2.5",
                   isActive
-                    ? "bg-accent text-accent-foreground"
-                    : "hover:bg-accent/50"
+                    ? "bg-accent text-accent-foreground border-accent-foreground/10 shadow-sm"
+                    : "hover:bg-accent/50 border-border/50 bg-muted/30 lg:bg-transparent"
                 )}
               >
-                <span className="text-sm font-medium leading-snug">
+                <span className="truncate text-sm font-medium leading-snug">
                   {result.resolved_key}
                 </span>
-                <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="flex items-center gap-2 text-[10px] text-muted-foreground lg:text-xs">
                   <span className="truncate">{label}</span>
                   {result.match_type !== "exact" && (
-                    <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px] leading-4">
+                    <Badge variant="outline" className="hidden shrink-0 px-1 py-0 text-[9px] leading-3 sm:inline-flex">
                       {result.match_type}
                     </Badge>
                   )}
@@ -225,13 +227,13 @@ export function HomePage() {
         <header
           className={cn(
             "mx-auto flex flex-col items-center transition-all duration-300",
-            hasResults ? "pb-4 pt-6 lg:pb-6 lg:pt-8" : "pb-8 pt-16 sm:pt-24"
+            hasResults ? "pb-3 pt-4 lg:pb-6 lg:pt-8" : "pb-8 pt-16 sm:pt-24"
           )}
         >
           <div
             className={cn(
               "flex items-center gap-3 transition-all duration-300",
-              hasResults ? "mb-3 lg:mb-4" : "mb-6"
+              hasResults ? "mb-2 lg:mb-4" : "mb-6"
             )}
           >
             <img
@@ -240,13 +242,13 @@ export function HomePage() {
               aria-hidden="true"
               className={cn(
                 "shrink-0 rounded-[0.4rem] transition-all duration-300",
-                hasResults ? "h-4 w-4 lg:h-5 lg:w-5" : "h-7 w-7"
+                hasResults ? "h-3.5 w-3.5 lg:h-5 lg:w-5" : "h-7 w-7"
               )}
             />
             <h1
               className={cn(
                 "font-semibold tracking-tight transition-all duration-300",
-                hasResults ? "text-base lg:text-lg" : "text-2xl sm:text-3xl"
+                hasResults ? "text-sm lg:text-lg" : "text-2xl sm:text-3xl"
               )}
             >
               MDict Web
@@ -288,7 +290,7 @@ export function HomePage() {
         {lookupLoading ? (
           <SearchResultsSkeleton />
         ) : activeResult ? (
-          <section className="grid gap-6 lg:grid-cols-[20rem_1fr]">
+          <section className="grid gap-4 lg:grid-cols-[20rem_1fr] lg:gap-6">
             <SearchResultList
               results={results}
               activeResultKey={activeResultKey}
@@ -296,11 +298,11 @@ export function HomePage() {
               onSelect={(r) => setActiveResultKey(lookupResultKey(r))}
             />
 
-            <div className="min-w-0 space-y-3">
+            <div className="min-w-0 flex-1 space-y-3">
               <div className="px-1">
-                <h2 className="truncate text-lg font-semibold">
+                <h2 className="truncate text-base font-semibold lg:text-lg">
                   {activeResult.resolved_key}
-                  <span className="ml-2 text-sm font-normal text-muted-foreground">
+                  <span className="ml-2 text-xs font-normal text-muted-foreground lg:text-sm">
                     {dictionaryLabels[activeResult.dictionary_id] ?? activeResult.dictionary_id}
                   </span>
                 </h2>
@@ -308,7 +310,7 @@ export function HomePage() {
               <EntryViewer
                 contentUrl={activeResult.content_url}
                 themeMode={dictionaryThemeModes[activeResult.dictionary_id]}
-                className="h-[30rem] lg:h-[40rem]"
+                className="h-[calc(100vh-16rem)] min-h-[25rem] lg:h-[40rem]"
               />
             </div>
           </section>
