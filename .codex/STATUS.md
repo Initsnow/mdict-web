@@ -216,6 +216,10 @@
 - 词典 manifest、词典列表/详情 API 与前端 `EntryViewer` 现已打通 `theme_mode = auto | dictionary | force_auto_dark`
 - 首页 viewer 会按当前词典的 `theme_mode` 决定是否跳过 auto-dark、沿用启发式检测，或在 dark 模式下强制启用通用 auto-dark
 - 新增配置与 HTTP smoke 覆盖，并保持 `cargo test --workspace` 和 `pnpm --dir frontend run build` 通过
+2026-04-04 修复搜索候选项过快回车导致误选的问题：
+- 在 `GlobalSearchBar` 的 `onChange` 中强制同步重置 `activeIndex` 为 `-1`
+- 解决输入过快时，旧的候选项高亮状态因异步更新延迟而在回车时被误选的问题
+- 已验证 `pnpm run build` 构建通过
 
 ## 实现约束
 
