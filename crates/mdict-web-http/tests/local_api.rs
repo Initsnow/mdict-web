@@ -260,7 +260,7 @@ async fn local_fixture_http_smoke_test() {
     );
     assert!(
         content_text.contains(
-            "data-audio-href=\"/api/v1/dictionaries/ldoce5pp/resources/content?key=sound%3A"
+            "data-audio-href=\"/api/v1/dictionaries/ldoce5pp/resources/content?key=sound://"
         ),
         "{content_text}"
     );
@@ -337,7 +337,7 @@ async fn local_fixture_http_smoke_test() {
     );
     assert!(
         redirect_content_text
-            .contains("/api/v1/dictionaries/ldoce5pp/resources/content?key=LM5style%2Ecss"),
+            .contains("/api/v1/dictionaries/ldoce5pp/resources/content?key=LM5style.css"),
         "{redirect_content_text}"
     );
 
@@ -386,14 +386,14 @@ async fn local_fixture_http_smoke_test() {
         .expect("resource body should decode");
     let resource_text = String::from_utf8(resource_body.to_vec()).expect("resource is utf-8");
     assert!(resource_text.contains("url("), "{resource_text}");
-    assert!(resource_text.contains("optima%2Ewoff2"), "{resource_text}");
+    assert!(resource_text.contains("optima.woff2"), "{resource_text}");
 
     let audio_resource = app
         .clone()
         .oneshot(
             Request::builder()
                 .uri(
-                    "/api/v1/dictionaries/ldoce5pp/resources/content?key=sound%3A%2F%2Fmedia%2Fenglish%2FameProns%2Flaadbuild-up.mp3",
+                    "/api/v1/dictionaries/ldoce5pp/resources/content?key=sound://media/english/ameProns/laadbuild-up.mp3",
                 )
                 .body(Body::empty())
                 .expect("audio resource request should build"),

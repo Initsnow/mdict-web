@@ -23,6 +23,7 @@
   - 词条 HTML 中的 `entry://...` 交叉引用会重写到同词典 `entries/content`，不再误走资源接口
   - `sound://...` 音频资源 key 到实际 MDD 路径的服务端归一化
   - 同名 `.css` / `.js` 资源会优先使用 MDX 同目录下的 sidecar 文件，而不是 MDD 中的同名资源
+  - 词条 HTML / CSS 中改写出来的资源 URL 现在只编码 query 中真正有歧义的字符，保留 `_` / `-` / `.` / `/` / `:` 等常见文件名与路径符号，避免词典样式依赖 `src` / `href` 原始片段时失效
   - `DictionaryBundle` manifest 现支持 `entry_script_mode = none | original`：`none` 默认移除词典脚本 / 事件属性 / `javascript:` 链接，`original` 则保留词典原始脚本并放宽词条页 CSP 到允许同源脚本
   - 词条 HTML 中的音频链接会改写到 `data-audio-href` 非导航属性；后端会按需注入极小播放 runtime，避免跳到浏览器默认媒体页
   - HTML/CSS 重写与内容安全头

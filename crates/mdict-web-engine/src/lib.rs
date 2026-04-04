@@ -27,9 +27,9 @@ use url::Url;
 
 const ENTRY_CACHE_CONTROL: &str = "public, max-age=60";
 const RESOURCE_CACHE_CONTROL: &str = "public, max-age=86400";
-const ENTRY_RENDER_VERSION_NONE: &str = "entry-html-v7:none";
-const ENTRY_RENDER_VERSION_ORIGINAL: &str = "entry-html-v7:original";
-const RESOURCE_RENDER_VERSION: &str = "resource-v1";
+const ENTRY_RENDER_VERSION_NONE: &str = "entry-html-v8:none";
+const ENTRY_RENDER_VERSION_ORIGINAL: &str = "entry-html-v8:original";
+const RESOURCE_RENDER_VERSION: &str = "resource-v2";
 const ENTRY_LINK_PREFIX: &str = "@@@LINK=";
 const MAX_ENTRY_REDIRECT_DEPTH: usize = 8;
 const ENTRY_AUDIO_RUNTIME_SCRIPT: &str = r#"<script>
@@ -1023,7 +1023,7 @@ fn is_dangerous_scheme(value: &str) -> bool {
 fn resource_content_url(dictionary_id: &str, resource_key: &str) -> String {
     format!(
         "/api/v1/dictionaries/{dictionary_id}/resources/content?key={}",
-        utf8_percent_encode(resource_key, NON_ALPHANUMERIC)
+        encode_resource_query_value(resource_key)
     )
 }
 
@@ -1037,11 +1037,42 @@ fn resource_content_url_opaque(dictionary_id: &str, resource_key: &str) -> Strin
 fn opaque_percent_encode(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len() * 3);
     for byte in raw.as_bytes() {
-        out.push('%');
-        out.push(char::from(b"0123456789ABCDEF"[(byte >> 4) as usize]));
-        out.push(char::from(b"0123456789ABCDEF"[(byte & 0x0F) as usize]));
+        push_percent_encoded_byte(&mut out, *byte);
     }
     out
+}
+
+fn encode_resource_query_value(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for byte in raw.as_bytes() {
+        if is_resource_query_byte_safe(*byte) {
+            out.push(char::from(*byte));
+        } else {
+            push_percent_encoded_byte(&mut out, *byte);
+        }
+    }
+    out
+}
+
+fn is_resource_query_byte_safe(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'~'
+            | b'/'
+            | b':'
+    )
+}
+
+fn push_percent_encoded_byte(out: &mut String, byte: u8) {
+    out.push('%');
+    out.push(char::from(b"0123456789ABCDEF"[(byte >> 4) as usize]));
+    out.push(char::from(b"0123456789ABCDEF"[(byte & 0x0F) as usize]));
 }
 
 fn entry_content_href(dictionary_id: &str, raw: &str) -> Option<String> {
@@ -1274,8 +1305,17 @@ mod tests {
     fn rewrite_css_urls_maps_relative_paths() {
         let rewritten = rewrite_css_urls("demo", "body { background: url(images/a.png); }");
         assert!(
-            rewritten.contains("/api/v1/dictionaries/demo/resources/content?key=images%2Fa%2Epng"),
+            rewritten.contains("/api/v1/dictionaries/demo/resources/content?key=images/a.png"),
             "{rewritten}"
+        );
+    }
+
+    #[test]
+    fn resource_content_url_preserves_filename_punctuation() {
+        let rewritten = resource_content_url("demo", "\\spkr_demo-icon.v1.png");
+        assert_eq!(
+            rewritten,
+            "/api/v1/dictionaries/demo/resources/content?key=%5Cspkr_demo-icon.v1.png"
         );
     }
 
@@ -1326,7 +1366,7 @@ mod tests {
         .expect("entry html should rewrite");
         assert!(
             rewritten.contains(
-                r#"class="speaker" data-audio-href="/api/v1/dictionaries/demo/resources/content?key=sound%3A%2F%2Fmedia%2Fenglish%2FameProns%2Fapple1%2Emp3""#
+                r#"class="speaker" data-audio-href="/api/v1/dictionaries/demo/resources/content?key=sound://media/english/ameProns/apple1.mp3""#
             ),
             "{rewritten}"
         );
@@ -1337,7 +1377,7 @@ mod tests {
         );
         assert!(
             !rewritten.contains(
-                r#"class="speaker" href="/api/v1/dictionaries/demo/resources/content?key=sound%3A%2F%2Fmedia%2Fenglish%2FameProns%2Fapple1%2Emp3""#
+                r#"class="speaker" href="/api/v1/dictionaries/demo/resources/content?key=sound://media/english/ameProns/apple1.mp3""#
             ),
             "{rewritten}"
         );
@@ -1371,7 +1411,7 @@ mod tests {
         assert!(rewritten.contains(r#"onclick="play()""#), "{rewritten}");
         assert!(
             rewritten
-                .contains(r#"src="/api/v1/dictionaries/demo/resources/content?key=js%2Fapp%2Ejs""#),
+                .contains(r#"src="/api/v1/dictionaries/demo/resources/content?key=js/app.js""#),
             "{rewritten}"
         );
         assert!(!allow_entry_runtime);
