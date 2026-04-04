@@ -103,6 +103,7 @@ export function GlobalSearchBar({
           autoFocus={autoFocus}
           onChange={(event) => {
             onChange(event.target.value);
+            setActiveIndex(-1);
             setOpen(true);
           }}
           onFocus={() => setOpen(true)}
