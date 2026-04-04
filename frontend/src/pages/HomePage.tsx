@@ -1,15 +1,34 @@
 import * as React from "react";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, BookOpen, RefreshCw } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { EntryViewer } from "@/components/EntryViewer";
 import { GlobalSearchBar } from "@/components/GlobalSearchBar";
+import { DictionaryCard } from "@/components/DictionaryCard";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSearchSuggest } from "@/hooks/useSearchSuggest";
 import { getDictionaries, searchLookup } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { isApiError, type DictionarySummary, type LookupResult } from "@/types/api";
+
+function DictionaryListSkeleton() {
+  return (
+    <div className="space-y-1">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <div key={i} className="flex items-center gap-3 px-3 py-3">
+          <Skeleton className="h-4 w-4 shrink-0 rounded" />
+          <Skeleton className="h-4 w-40" />
+          <div className="ml-auto flex gap-4">
+            <Skeleton className="h-3 w-16" />
+            <Skeleton className="h-3 w-20" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function SearchResultsSkeleton() {
   return (
@@ -98,6 +117,7 @@ export function HomePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [dictionaries, setDictionaries] = React.useState<DictionarySummary[]>([]);
   const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState<string | null>(null);
 
   const [query, setQuery] = React.useState(searchParams.get("q") ?? "");
   const [results, setResults] = React.useState<LookupResult[]>([]);
@@ -107,6 +127,7 @@ export function HomePage() {
 
   const fetchDictionaries = React.useCallback(() => {
     setLoading(true);
+    setError(null);
     getDictionaries()
       .then((response) => {
         setDictionaries(response.items);
@@ -114,6 +135,7 @@ export function HomePage() {
       })
       .catch((err: unknown) => {
         console.error("Failed to load dictionaries", err);
+        setError(err instanceof Error ? err.message : "Failed to load dictionaries");
         setLoading(false);
       });
   }, []);
@@ -191,6 +213,7 @@ export function HomePage() {
     results.find((r) => lookupResultKey(r) === activeResultKey) ?? results[0] ?? null;
 
   const hasResults = results.length > 0 || lookupLoading || lookupError;
+  const hasSearchQuery = query.trim().length > 0;
 
   return (
     <div className="min-h-screen">
@@ -283,6 +306,50 @@ export function HomePage() {
             </div>
           </section>
         ) : null}
+
+        {!hasSearchQuery && (
+          <section className="mt-2 pb-12">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-sm font-medium text-muted-foreground">Dictionaries</h2>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={fetchDictionaries}
+                className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
+              >
+                <RefreshCw className="h-3 w-3" />
+                Refresh
+              </Button>
+            </div>
+
+            {loading ? (
+              <DictionaryListSkeleton />
+            ) : error ? (
+              <div className="flex flex-col items-center gap-3 py-16 text-center">
+                <AlertCircle className="h-6 w-6 text-destructive" />
+                <p className="text-sm">{error}</p>
+                <Button variant="outline" size="sm" onClick={fetchDictionaries}>
+                  Try again
+                </Button>
+              </div>
+            ) : dictionaries.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 py-16 text-center text-muted-foreground">
+                <BookOpen className="h-6 w-6" />
+                <p className="text-sm">No dictionaries found</p>
+                <p className="text-xs">Add MDX or MDD files to your server configuration.</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-border rounded-lg border border-border">
+                {dictionaries.map((dictionary) => (
+                  <DictionaryCard
+                    key={dictionary.dictionary_id}
+                    dictionary={dictionary}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        )}
       </div>
     </div>
   );
