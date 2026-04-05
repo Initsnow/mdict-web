@@ -5,6 +5,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use mdict_web_http::{FrontendAssets, HttpState, router};
 use mdict_web_service::ReloadableDictionaryService;
+use serde_json::Value;
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -46,11 +47,26 @@ async fn local_fixture_http_smoke_test() {
         .await
         .expect("list body should decode");
     let list_text = String::from_utf8(list_body.to_vec()).expect("list body is utf-8");
-    assert!(list_text.contains("\"theme_mode\":\"auto\""), "{list_text}");
-    assert!(
-        list_text.contains("\"theme_mode\":\"dictionary\""),
-        "{list_text}"
-    );
+    let list_json: Value = serde_json::from_str(&list_text).expect("list body should be json");
+    let items = list_json["items"]
+        .as_array()
+        .expect("dictionary list items should be an array");
+    let primary = items
+        .iter()
+        .find(|item| item["dictionary_id"] == "ldoce5pp")
+        .expect("primary dictionary should exist");
+    let secondary = items
+        .iter()
+        .find(|item| item["dictionary_id"] == "ldoce5pp_alt")
+        .expect("secondary dictionary should exist");
+
+    assert_eq!(primary["display_name"], "ldoce5pp");
+    assert_eq!(primary["theme_mode"], "auto");
+    assert!(primary.get("description").is_none(), "{primary}");
+    assert!(primary.get("source_lang").is_none(), "{primary}");
+    assert!(primary.get("target_lang").is_none(), "{primary}");
+    assert_eq!(secondary["display_name"], "LDOCE5++ Alt");
+    assert_eq!(secondary["theme_mode"], "dictionary");
 
     let frontend_index = app
         .clone()
@@ -500,7 +516,9 @@ reload_token = "integration-test-token"
 
 [[catalog.bundles]]
 dictionary_id = "ldoce5pp"
-display_name = "LDOCE5++"
+description = "   "
+source_lang = ""
+target_lang = "  "
 mdx_path = "{}"
 mdd_path = "{}"
 entry_script_mode = "none"

@@ -23,9 +23,9 @@ const statusText: Record<DictionarySummary["status"], string> = {
 
 export function DictionaryCard({ dictionary, className }: DictionaryCardProps) {
   const langLabel =
-    dictionary.source_lang && dictionary.target_lang !== dictionary.source_lang
+    dictionary.source_lang && dictionary.target_lang && dictionary.target_lang !== dictionary.source_lang
       ? `${dictionary.source_lang} → ${dictionary.target_lang}`
-      : dictionary.source_lang || null;
+      : dictionary.source_lang || dictionary.target_lang || null;
 
   return (
     <div

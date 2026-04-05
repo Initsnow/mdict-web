@@ -70,7 +70,6 @@
   "entry_count": 125000,
   "has_resources": true,
   "theme_mode": "auto",
-  "tags": ["english", "learner"],
   "status": "ready"
 }
 ```
@@ -87,7 +86,6 @@
   "entry_count": 125000,
   "has_resources": true,
   "theme_mode": "auto",
-  "tags": ["english", "learner"],
   "status": "ready",
   "header": {
     "title": "Oxford Advanced Learner's Dictionary",
@@ -101,6 +99,8 @@
 
 说明：
 
+- `display_name`: 总是返回；若配置文件省略或写成空白字符串，后端回退到 `dictionary_id`
+- `description` / `source_lang` / `target_lang`: 可选；若配置文件省略或写成空白字符串，接口会直接省略这些字段
 - `theme_mode`: 词典级夜间模式策略，取值为 `auto | dictionary | force_auto_dark`
 - `theme_mode = auto`: 前端 viewer 在 dark 模式下按渲染结果做启发式 auto-dark；若词条本身已是暗色，则跳过反相
 - `theme_mode = dictionary`: 前端 viewer 信任词典自身主题，不再做 auto-dark 兜底
@@ -211,7 +211,6 @@
       "entry_count": 125000,
       "has_resources": true,
       "theme_mode": "auto",
-      "tags": ["english", "learner"],
       "status": "ready"
     }
   ]

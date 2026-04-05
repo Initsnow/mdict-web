@@ -155,8 +155,6 @@ pub struct DictionaryBundleManifest {
     pub source_lang: Option<String>,
     #[serde(default)]
     pub target_lang: Option<String>,
-    #[serde(default)]
-    pub tags: Vec<String>,
     pub mdx_path: PathBuf,
     #[serde(default)]
     pub mdd_paths: Vec<PathBuf>,
@@ -174,15 +172,14 @@ pub struct DictionaryBundleManifest {
 #[serde(deny_unknown_fields)]
 struct RawDictionaryBundleManifest {
     dictionary_id: String,
-    display_name: String,
+    #[serde(default)]
+    display_name: Option<String>,
     #[serde(default)]
     description: Option<String>,
     #[serde(default)]
     source_lang: Option<String>,
     #[serde(default)]
     target_lang: Option<String>,
-    #[serde(default)]
-    tags: Vec<String>,
     mdx_path: PathBuf,
     #[serde(default)]
     mdd_path: Option<PathBuf>,
@@ -284,33 +281,47 @@ impl<'de> Deserialize<'de> for DictionaryBundleManifest {
         D: Deserializer<'de>,
     {
         let raw = RawDictionaryBundleManifest::deserialize(deserializer)?;
-        if raw.mdd_path.is_some() && raw.mdd_paths.is_some() {
+        let RawDictionaryBundleManifest {
+            dictionary_id,
+            display_name,
+            description,
+            source_lang,
+            target_lang,
+            mdx_path,
+            mdd_path,
+            mdd_paths,
+            entry_script_mode,
+            theme_mode,
+            passcode,
+            metadata,
+        } = raw;
+
+        if mdd_path.is_some() && mdd_paths.is_some() {
             return Err(serde::de::Error::custom(
                 "use either `mdd_path` or `mdd_paths`, not both",
             ));
         }
 
-        let mdd_paths = match (raw.mdd_path, raw.mdd_paths) {
+        let mdd_paths = match (mdd_path, mdd_paths) {
             (Some(path), None) => vec![path],
             (None, Some(paths)) => paths,
             (None, None) => Vec::new(),
             (Some(_), Some(_)) => unreachable!("handled above"),
         };
 
-        Ok(Self {
-            dictionary_id: raw.dictionary_id,
-            display_name: raw.display_name,
-            description: raw.description,
-            source_lang: raw.source_lang,
-            target_lang: raw.target_lang,
-            tags: raw.tags,
-            mdx_path: raw.mdx_path,
+        Ok(normalize_manifest(Self {
+            dictionary_id,
+            display_name: display_name.unwrap_or_default(),
+            description,
+            source_lang,
+            target_lang,
+            mdx_path,
             mdd_paths,
-            entry_script_mode: raw.entry_script_mode,
-            theme_mode: raw.theme_mode,
-            passcode: raw.passcode,
-            metadata: raw.metadata,
-        })
+            entry_script_mode,
+            theme_mode,
+            passcode,
+            metadata,
+        }))
     }
 }
 
@@ -353,9 +364,7 @@ fn resolve_manifest(
         .into_iter()
         .map(|path| absolutize(base_dir, &path))
         .collect();
-    manifest.tags.sort();
-    manifest.tags.dedup();
-    manifest
+    normalize_manifest(manifest)
 }
 
 fn validate_manifests(manifests: &[DictionaryBundleManifest]) -> Result<(), ConfigError> {
@@ -385,12 +394,6 @@ fn validate_manifests(manifests: &[DictionaryBundleManifest]) -> Result<(), Conf
         if !ids.insert(manifest.dictionary_id.clone()) {
             return Err(ConfigError::Invalid(format!(
                 "duplicate dictionary_id `{}`",
-                manifest.dictionary_id
-            )));
-        }
-        if manifest.display_name.trim().is_empty() {
-            return Err(ConfigError::Invalid(format!(
-                "display_name must not be empty for `{}`",
                 manifest.dictionary_id
             )));
         }
@@ -431,6 +434,22 @@ fn absolutize(base_dir: &Path, path: &Path) -> PathBuf {
     } else {
         base_dir.join(path)
     }
+}
+
+fn normalize_manifest(mut manifest: DictionaryBundleManifest) -> DictionaryBundleManifest {
+    manifest.display_name = normalize_optional_string(Some(manifest.display_name))
+        .unwrap_or_else(|| manifest.dictionary_id.clone());
+    manifest.description = normalize_optional_string(manifest.description);
+    manifest.source_lang = normalize_optional_string(manifest.source_lang);
+    manifest.target_lang = normalize_optional_string(manifest.target_lang);
+    manifest
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    })
 }
 
 fn default_bind() -> SocketAddr {
@@ -497,7 +516,6 @@ mod tests {
                 description: None,
                 source_lang: None,
                 target_lang: None,
-                tags: vec![],
                 mdx_path: PathBuf::from("/tmp/demo.mdx"),
                 mdd_paths: vec![],
                 entry_script_mode: EntryScriptMode::None,
@@ -511,7 +529,6 @@ mod tests {
                 description: None,
                 source_lang: None,
                 target_lang: None,
-                tags: vec![],
                 mdx_path: PathBuf::from("/tmp/demo-2.mdx"),
                 mdd_paths: vec![],
                 entry_script_mode: EntryScriptMode::None,
@@ -537,6 +554,38 @@ mdd_path = "demo.mdd"
         )
         .expect("legacy mdd_path should normalize");
         assert_eq!(manifest.mdd_paths, vec![PathBuf::from("demo.mdd")]);
+    }
+
+    #[test]
+    fn manifest_display_name_defaults_to_dictionary_id() {
+        let manifest = toml::from_str::<DictionaryBundleManifest>(
+            r#"
+dictionary_id = "demo"
+mdx_path = "demo.mdx"
+"#,
+        )
+        .expect("manifest should parse without display_name");
+        assert_eq!(manifest.display_name, "demo");
+    }
+
+    #[test]
+    fn manifest_blank_display_and_optional_strings_are_normalized() {
+        let manifest = toml::from_str::<DictionaryBundleManifest>(
+            r#"
+dictionary_id = "demo"
+display_name = "   "
+description = "   "
+source_lang = ""
+target_lang = "  zh "
+mdx_path = "demo.mdx"
+"#,
+        )
+        .expect("manifest should normalize blank strings");
+
+        assert_eq!(manifest.display_name, "demo");
+        assert_eq!(manifest.description, None);
+        assert_eq!(manifest.source_lang, None);
+        assert_eq!(manifest.target_lang.as_deref(), Some("zh"));
     }
 
     #[test]
@@ -583,9 +632,9 @@ mdd_path = "dict/demo.mdd"
 
 [[catalog.bundles]]
 dictionary_id = "multi"
-display_name = "Multi"
-mdx_path = "dict/multi.mdx"
-mdd_paths = ["dict/multi.1.mdd", "dict/multi.2.mdd"]
+            display_name = "Multi"
+            mdx_path = "dict/multi.mdx"
+            mdd_paths = ["dict/multi.1.mdd", "dict/multi.2.mdd"]
 "#,
         )
         .expect("config should write");
@@ -617,7 +666,6 @@ mdd_paths = ["dict/multi.1.mdd", "dict/multi.2.mdd"]
             description: None,
             source_lang: None,
             target_lang: None,
-            tags: vec![],
             mdx_path,
             mdd_paths: vec![mdd_path.clone(), mdd_path],
             entry_script_mode: EntryScriptMode::None,

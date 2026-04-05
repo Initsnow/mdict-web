@@ -7,22 +7,21 @@ export type ThemeMode = "auto" | "dictionary" | "force_auto_dark";
 export interface DictionarySummary {
   dictionary_id: string;
   display_name: string;
-  description: string;
-  source_lang: string;
-  target_lang: string;
+  description?: string;
+  source_lang?: string;
+  target_lang?: string;
   entry_count: number;
   has_resources: boolean;
   theme_mode: ThemeMode;
-  tags: string[];
   status: DictionaryStatus;
 }
 
 export interface DictionaryHeader {
-  title: string;
-  description: string;
+  title: string | null;
+  description: string | null;
   generated_by_engine_version: string;
   required_engine_version: string;
-  encoding_label: string;
+  encoding_label: string | null;
 }
 
 export interface DictionaryDetail extends DictionarySummary {

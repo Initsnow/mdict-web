@@ -212,7 +212,6 @@ pub struct DictionarySummary {
     pub entry_count: u64,
     pub has_resources: bool,
     pub theme_mode: ThemeMode,
-    pub tags: Vec<String>,
     pub status: DictionaryStatus,
 }
 
