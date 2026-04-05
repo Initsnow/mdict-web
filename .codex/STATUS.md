@@ -270,6 +270,52 @@
 - 这次把 service 层的多词典搜索从“按词典串行 await”改成“按词典并发 fan-out，再按原词典顺序组装结果”；单词典基准本身不直接覆盖这条路径，所以这轮命令主要用来做回归校验而不是直接证明并发收益
 - 现有单词典短样本里 `suggest` 没有统计显著变化；真实收益应体现在多词典聚合请求的 wall-clock latency，而不是这条 bench 的单词典热路径
 
+2026-04-04 在本地 `mdict-web.toml` 额外接入 Documents 词典并测首次 sidecar 建索引：
+
+- 新增 bundle：`hanyudazidian`、`xh7`、`nsyc`、`collins8`、`kec`、`ciecd`
+- 首次冷启动日志时间：
+  - `hanyudazidian`: 约 `603 ms`
+  - `xh7`: 约 `597 ms`
+  - `nsyc`: 约 `3.20 s`
+  - `collins8`: 约 `1.37 s`
+  - `kec`: 约 `99 ms`
+  - `ciecd`: 约 `275 ms`
+- 六本新词典首次建索引合计约 `6.15 s`
+- 完成 sidecar 后再次 warm startup：约 `426 ms`
+
+说明：
+
+- 这次测量基于新增词典首次缺失 `index/*.suggest.*` 文件的真实冷启动；老词典 sidecar 已存在，因此只把 `oald10 -> hanyudazidian` 到 `kec -> ciecd` 这一段视为新增词典索引成本
+- 当前这几本里最重的是 `nsyc`（`368430` 词头），明显慢于其余几本；其余多数词典首次建索引都在 `1.5 s` 内，完成后常规启动仍维持在亚秒级
+
+2026-04-04 用 10 本本地词典对比全局多词典搜索的真实 HTTP wall-clock latency：
+
+- 对比方式：
+  - 顺序 fan-out：`90d317d`（仅保留 `keys_at` 混合 hydration，尚未并发 fan-out）
+  - 并发 fan-out：`670b0bd`
+  - 两边都使用相同的 10 本词典配置，分别监听 `127.0.0.1:3101` / `127.0.0.1:3102`
+  - 每个接口 warm up `5` 次，再采样 `20` 次，统计 `curl` 的 `time_total`
+- 结果：
+  - `search_suggest?q=app&limit=20`
+    - 顺序：平均 `7.632 ms`，p50 `7.638 ms`，p95 `8.551 ms`
+    - 并发：平均 `3.311 ms`，p50 `3.099 ms`，p95 `3.964 ms`
+  - `search_lookup?key=apple`
+    - 顺序：平均 `63.220 ms`，p50 `63.654 ms`，p95 `65.451 ms`
+    - 并发：平均 `29.785 ms`，p50 `28.996 ms`，p95 `39.070 ms`
+  - `search_suggest?q=汉&limit=20`
+    - 顺序：平均 `21.705 ms`，p50 `22.303 ms`，p95 `27.285 ms`
+    - 并发：平均 `19.656 ms`，p50 `22.178 ms`，p95 `24.703 ms`
+  - `search_lookup?key=汉`
+    - 顺序：平均 `53.872 ms`，p50 `53.605 ms`，p95 `55.445 ms`
+    - 并发：平均 `33.879 ms`，p50 `33.123 ms`，p95 `45.560 ms`
+
+说明：
+
+- 英文查询的收益最明显：`suggest app` 平均耗时约减半，`lookup apple` 平均耗时从约 `63 ms` 降到约 `30 ms`
+- 中文 `suggest 汉` 的收益较小，说明当前这类查询更可能受某几本大中文词典本身的单词典耗时主导，而不是被“跨词典串行等待”主导
+- `lookup 汉` 仍有明显改善，说明全局 exact lookup 即使在中文场景下也能从并发 fan-out 中获益
+- 这轮测量是本机回环接口 + warm sidecar 的应用层真实 wall-clock，对“并发 fan-out 值不值得做”已经足够说明问题；但它仍不代表远端网络、冷 cache 或更高并发下的最终上限
+
 ## 实现约束
 
 - 不直接在 async runtime 上执行词典阻塞 I/O
