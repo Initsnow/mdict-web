@@ -14,6 +14,7 @@
 - 已有独立 `frontend/`，实现了搜索优先首页和单词典详情页
 - 前端 `EntryViewer` 现在会在同源词条 iframe 内注入通用 auto-dark runtime，跟随父页面 light/dark 状态做启发式夜间模式适配，而不是为单本词典写死 CSS
 - 后端在 `frontend/dist` 存在时可直接通过 `axum` 同源托管前端静态资源
+- `flake.nix` 现导出 deployable `mdict-web` 包、默认 `app` 与 `nixosModules.default`；打包产物会把 `frontend/dist` 一起装入包内，并通过 wrapper 默认指向同包静态资源
 - 词条 HTML 的 `304 Not Modified` 响应会保留与 `200` 一致的安全头，避免浏览器缓存复用旧 CSP
 - 后端已具备：
   - TOML 配置与 `DictionaryBundle` manifest
@@ -38,7 +39,7 @@
 
 ## 已锁定的设计决策
 
-- 解析内核使用 `~/projects/mdict-rs` / `mdict-rs = "0.1"`
+- 解析内核使用官方 crates.io `mdict-rs = "0.1.4"`
 - 后端是 Rust API 服务，前端与后端架构分离
 - API 合同以 `docs/API_CONTRACT.md` 为准
 - 词条正文和 JSON 元数据分离返回
@@ -61,6 +62,7 @@
 7. 可选缓存与命中指标
 8. 搜索优先首页、全局多词典搜索结果与 iframe 预览
 9. 单元测试、HTTP smoke test、criterion benchmark
+10. Nix package / NixOS module 与同包前端静态资源部署链路
 
 ## 剩余增强项
 
@@ -315,6 +317,18 @@
 - 中文 `suggest 汉` 的收益较小，说明当前这类查询更可能受某几本大中文词典本身的单词典耗时主导，而不是被“跨词典串行等待”主导
 - `lookup 汉` 仍有明显改善，说明全局 exact lookup 即使在中文场景下也能从并发 fan-out 中获益
 - 这轮测量是本机回环接口 + warm sidecar 的应用层真实 wall-clock，对“并发 fan-out 值不值得做”已经足够说明问题；但它仍不代表远端网络、冷 cache 或更高并发下的最终上限
+
+2026-04-05 为 Nix package / NixOS module 与同包前端静态资源部署链路再次执行同一命令：
+
+- `lookup/ldoce_apple`: `977.21 µs .. 997.39 µs`
+- `lookup/ldoce_suggest_app`: `40.064 µs .. 40.812 µs`
+- `lookup/ldoce_entry_content_apple`: `6.0229 ms .. 7.0838 ms`
+
+说明：
+
+- 这次改动集中在 `flake.nix`、NixOS module、README 和示例配置；后端热路径代码未变，因此这轮 bench 主要用于回归校验而不是证明性能提升
+- 短样本下 `lookup` 没有统计显著变化；`suggest` 与 `entry_content` 显示改善，但更可能属于 measurement window 波动，不把这次结果直接解释成稳定收益
+- 本轮同时验证了 `cargo fmt --all`、`cargo test --workspace` 和 `nix build .#mdict-web` 通过，说明 deployable package 与现有应用回归链路已打通
 
 ## 实现约束
 

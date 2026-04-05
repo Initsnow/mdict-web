@@ -2,7 +2,7 @@
 
 ## 1. 目标
 
-基于 `~/projects/mdict-rs`（crates.io 上的 `mdict-rs = "0.1"`）实现一个：
+基于官方 crates.io 上的 `mdict-rs = "0.1.4"` 实现一个：
 
 - 高性能
 - API-first
@@ -134,7 +134,8 @@ mdict-web/
 
 - `React + Vite`
 - 通过生成的 TypeScript 类型消费 API
-- 开发期优先使用 `Vite` dev server；部署时允许由 `axum` 直接同源托管 `frontend/dist`
+- 开发期优先使用 `Vite` dev server；部署时默认构建 `frontend/dist` 并由 `axum` 直接同源托管
+- Nix/NixOS 部署优先输出单包：Rust 二进制 + `frontend/dist`，避免额外静态站点进程
 
 ## 5. 核心领域模型
 
@@ -395,6 +396,7 @@ API 合同以 `docs/API_CONTRACT.md` 为准。
 - 热重载或显式 reload
 - 健康检查和 readiness
 - 运行参数与日志完善
+- 提供 flake package 与 NixOS module，默认复用同一个 `axum` 进程托管前端页面
 
 完成标准：
 

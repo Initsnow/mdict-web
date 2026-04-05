@@ -62,6 +62,7 @@ If code and docs disagree, bring the docs back in sync before ending the task.
 - `cargo fmt --all`
 - `cargo test --workspace`
 - `cargo bench -p mdict-web-app --bench lookup -- --sample-size 10 --warm-up-time 0.1 --measurement-time 0.1`
+- 若任务涉及 `flake.nix` / `nix/` / 部署链路，再补 `nix build .#mdict-web`
 
 本地真实词典 smoke/benchmark 目前默认使用：
 
@@ -78,3 +79,5 @@ If code and docs disagree, bring the docs back in sync before ending the task.
 - 可用 `--frontend-dist` 或 `MDICT_WEB_FRONTEND_DIST` 覆盖 dist 路径
 - 可用 `--no-frontend` 或 `MDICT_WEB_DISABLE_FRONTEND=true` 关闭静态前端托管
 - 开发期仍优先使用 `frontend/` 下的 Vite dev server
+- `flake.nix` 产出的 `mdict-web` wrapper 会默认把 `MDICT_WEB_FRONTEND_DIST` 指到包内随附的 `frontend/dist`
+- 仓库内的 `.cargo/config.toml` 会把本机全局 Cargo `mirror` 源重定向到官方 crates.io，避免 `mdict-rs = "0.1.4"` 被过期镜像版本截断
