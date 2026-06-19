@@ -114,7 +114,7 @@
           pname = "mdict-web";
           inherit version;
           src = cargoSrc;
-          cargoHash = "sha256-KBwf3CuYTcjheV1EehGsaKEJEEJrxyYNmaN0fXKx77o=";
+          cargoHash = "sha256-BksMAFy/cNw3/Y1wPY3vU4iWEzt0OV3h6L4u9vWbnpA=";
           cargoBuildFlags = [
             "-p"
             "mdict-web-app"
